@@ -23,7 +23,8 @@ SWE-Learner/
     utils/retrieval.py         ← BM25Retriever
     run/extra/swebench.py      ← --domain2-keypoints / --domain2-env CLI flags
     config/extra/
-      swebench_exp.yaml        ← env_knowledge_top_k = 5
+      synthesis.yaml           ← local-env config for trajectory collection
+      swebench_exp.yaml        ← Docker/SWE-bench config with env_knowledge_top_k = 5
 
   synthesis/                 bug synthesis pipeline  [Step 1]
     strict_mask_generator.py   core bug generator (LLM-based masked code rewriting)
@@ -112,14 +113,18 @@ python synthesis/prepare_instances.py \
     --output synthesis/workdir/instances_for_trajectory.jsonl
 
 # ⑥ Collect repair trajectories
+# The agent runs locally inside each prepared repo (no Docker required).
+# synthesis.yaml uses environment_class: local and is tuned for automated collection.
 python synthesis/collect_trajectories.py \
     --instances synthesis/workdir/instances_for_trajectory.jsonl \
     --work-dir synthesis/workdir \
-    --config src/minisweagent/config/extra/swebench_exp.yaml \
+    --config src/minisweagent/config/extra/synthesis.yaml \
     --model gpt-5-mini
 ```
 
 Trajectories are saved to `synthesis/workdir/trajectories/`.
+
+> **Note**: step ⑥ runs the agent directly inside each locally-cloned repository (set up by step ①), not inside a Docker container. The `synthesis.yaml` config uses `environment_class: local` and is appropriate for this automated collection. The `swebench_exp.yaml` config (used in Step 3) is for Docker-based SWE-bench evaluation only.
 
 ---
 
