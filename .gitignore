@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+
+# Local run outputs
+synthesis/workdir/
+distilling/output/
+output/
+out/
+*.log
+
+# IDE
+.vscode/
+.idea/

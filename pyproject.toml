@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "swe-learner"
+dynamic = ["version"]
+description = "SWE-Learner: Learning from Experience for Software Engineering Agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["nlp", "agents", "code", "software engineering"]
+authors = [
+    { name = "Anonymous" },
+]
+
+dependencies = [
+    # agent runtime
+    "pyyaml",
+    "requests",
+    "jinja2",
+    "litellm>=1.75.5",
+    "tenacity",
+    "rich",
+    "python-dotenv",
+    "typer",
+    "platformdirs",
+    "textual",
+    "prompt_toolkit",
+    "openai!=1.100.0,!=1.100.1",
+    # distilling
+    "datasets",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.scripts]
+# agent runner
+mini           = "minisweagent.run.mini:app"
+mini-swe-agent = "minisweagent.run.mini:app"
+# experience extraction
+swe-learner-extract   = "distilling.experience_extractor:main"
+swe-learner-aggregate = "distilling.repo_aggregator:main"
+swe-learner-filter    = "distilling.leakage_filter:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# scan both root (for distilling/) and src/ (for minisweagent/)
+where = [".", "src"]
+include = ["distilling*", "minisweagent*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "minisweagent.__version__" }
+
+[tool.setuptools.package-data]
+minisweagent = ["config/**/*"]

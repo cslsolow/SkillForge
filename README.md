@@ -1,0 +1,184 @@
+# 🧠 SWE-Learner
+
+SWE-Learner is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
+
+It extends [mini-swe-agent](https://github.com/princeton-nlp/mini-swe-agent) with two additional components:
+
+- **`synthesis/`** — proactively generate buggy instances for any GitHub repository and collect repair trajectories
+- **`distilling/`** — self-distill structured *keypoints* and *environment knowledge* from those trajectories
+
+The overall pipeline is: **synthesize → distill → run agent with experience**.
+
+The agent code (with experience injection) lives in the standard `src/minisweagent/` package, exactly as in mini-swe-agent.
+
+---
+
+## 📦 Repository layout
+
+```
+SWE-Learner/
+  src/minisweagent/          mini-swe-agent core (with experience injection)
+    agents/default.py          ← _augment_task_with_domain2_env, _maybe_inject_domain2_keypoints
+    utils/experience.py        ← load_domain2_experience_jsonl
+    utils/retrieval.py         ← BM25Retriever
+    run/extra/swebench.py      ← --domain2-keypoints / --domain2-env CLI flags
+    config/extra/
+      swebench_exp.yaml        ← env_knowledge_top_k = 5
+
+  synthesis/                 bug synthesis pipeline  [Step 1]
+    strict_mask_generator.py   core bug generator (LLM-based masked code rewriting)
+    tracer.py                  runtime code tracer
+    code_analyzer.py           static code analyzer
+    setup_repos.py             ① clone repos & create venvs for SWE-bench instances
+    verify_tests.py            ② verify extracted tests pass on base_commit
+    generate_bugs.py           ③ generate buggy variants via strict_mask_generator
+    prepare_instances.py       ④ assemble instances_for_trajectory.jsonl
+    collect_trajectories.py    ⑤ run mini-swe-agent and collect repair trajectories
+
+  distilling/                experience extraction pipeline  [Step 2]
+    schema.py                  data classes
+    trajectory_io.py           load trajectories & golden info
+    llm_client.py              LLM wrapper (litellm + retry)
+    code_index.py              AST-based Python scope indexer
+    access_extractor.py        parse bash actions → code-access events
+    experience_extractor.py    Stage ① main extraction pipeline
+    repo_aggregator.py         Stage ② repo-level aggregation
+    leakage_filter.py          Stage ③ evaluation-safety filter
+
+  private/
+    retrieval.py               BM25Retriever (used by the agent at inference)
+```
+
+---
+
+## 🚀 Installation
+
+```bash
+pip install -e .
+```
+
+Copy `.env.example` to `.env` and fill in your API key:
+
+```bash
+cp .env.example .env
+```
+
+---
+
+## 🐛 Step 1 — Synthesis: generate buggy instances & collect trajectories
+
+The synthesis pipeline creates training data by introducing controlled bugs into a target repository and collecting the agent's repair attempts.
+
+### Prerequisites
+
+```bash
+# Install SWE-bench datasets library
+pip install datasets
+
+# Set API credentials
+export OPENAI_API_KEY=...
+export OPENAI_BASE_URL=...   # optional
+```
+
+### Step-by-step
+
+```bash
+# ① Clone repos and create virtual environments
+python synthesis/setup_repos.py \
+    --repo-url https://github.com/owner/repo.git \
+    --dataset verified \
+    --filter "owner__repo" \
+    --work-dir synthesis/workdir
+
+# ② Extract existing tests from FAIL_TO_PASS / test_patch
+python synthesis/extract_tests.py \
+    --work-dir synthesis/workdir \
+    --output synthesis/workdir/target_tests.json
+
+# ③ (Optional) Verify extracted tests pass on base_commit
+python synthesis/verify_tests.py \
+    --target-tests synthesis/workdir/target_tests.json \
+    --work-dir synthesis/workdir \
+    --output synthesis/workdir/target_tests_verified.json
+
+# ④ Generate buggy variants
+python synthesis/generate_bugs.py \
+    --target-tests synthesis/workdir/target_tests_verified.json \
+    --work-dir synthesis/workdir
+
+# ⑤ Assemble trajectory input
+python synthesis/prepare_instances.py \
+    --bugs-dir synthesis/workdir/bugs_from_patch \
+    --output synthesis/workdir/instances_for_trajectory.jsonl
+
+# ⑥ Collect repair trajectories
+python synthesis/collect_trajectories.py \
+    --instances synthesis/workdir/instances_for_trajectory.jsonl \
+    --work-dir synthesis/workdir \
+    --config src/minisweagent/config/extra/swebench_exp.yaml \
+    --model gpt-5-mini
+```
+
+Trajectories are saved to `synthesis/workdir/trajectories/`.
+
+---
+
+## 🔬 Step 2 — Distilling: extract experience from trajectories
+
+The distilling pipeline turns the collected trajectories into reusable *keypoints* (file-level bug-fix lessons) and *environment knowledge* (API-level playbooks).
+
+### Stage ①  Extract per-instance experiences
+
+```bash
+python -m distilling.experience_extractor \
+    --traj-dir synthesis/workdir/trajectories \
+    -o out/
+```
+
+### Stage ②  Aggregate to repo level
+
+```bash
+python -m distilling.repo_aggregator \
+    --input-dir out/ \
+    -o out/
+```
+
+### Stage ③  Filter evaluation leakage
+
+```bash
+python -m distilling.leakage_filter \
+    --input-dir out/ \
+    --exclude-dir /path/to/eval_instances \
+    -o out/filtered/
+```
+
+Output files: `out/filtered/repo_keypoints.jsonl`, `out/filtered/repo_env_knowledge.jsonl`
+
+---
+
+## 🤖 Step 3 — Agent: run with experience injection
+
+```bash
+# After distilling experiences, run the agent on SWE-bench
+mini-swe-agent run-swebench \
+    --subset verified --split test \
+    --config src/minisweagent/config/extra/swebench_exp.yaml \
+    --domain2-keypoints out/filtered/repo_keypoints.jsonl \
+    --domain2-env       out/filtered/repo_env_knowledge.jsonl \
+    -o output/run_with_exp \
+    -w 4
+```
+
+### How experience injection works
+
+| Experience | Injection point | Mechanism |
+|---|---|---|
+| **Env Knowledge** | Start of task | Appended to instance prompt as `=== External Memory (Env Knowledge) ===`; top-k selected by BM25 |
+| **Keypoints** | During trajectory | Injected as user message `=== Internal Memory (Keypoints) ===` when agent accesses the relevant file |
+
+---
+
+## 🙏 Acknowledgements
+
+SWE-Learner builds on [mini-swe-agent](https://github.com/SWE-agent/mini-SWE-agent) for the agent infrastructure and uses [SWE-bench](https://www.swebench.com) as the evaluation benchmark. We thank the respective authors for making their work openly available.
+
