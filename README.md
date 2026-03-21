@@ -1,5 +1,10 @@
 # 🧠 SWE-Learner
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![SWE-bench](https://img.shields.io/badge/SWE--bench-Verified-brightgreen.svg)](https://www.swebench.com/)
+[![Docker](https://img.shields.io/badge/docker-SWE--bench%20eval-blue.svg?logo=docker)](https://www.docker.com/)
+[![Built on mini-swe-agent](https://img.shields.io/badge/built%20on-mini--swe--agent-purple.svg)](https://github.com/princeton-nlp/mini-swe-agent)
+
 SWE-Learner is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
 
 It extends [mini-swe-agent](https://github.com/princeton-nlp/mini-swe-agent) with two additional components:
@@ -123,8 +128,6 @@ python synthesis/collect_trajectories.py \
 ```
 
 Trajectories are saved to `synthesis/workdir/trajectories/`.
-
-> **Note**: step ⑥ runs the agent directly inside each locally-cloned repository (set up by step ①), not inside a Docker container. The `synthesis.yaml` config uses `environment_class: local` and is appropriate for this automated collection. The `swebench_exp.yaml` config (used in Step 3) is for Docker-based SWE-bench evaluation only.
 
 ---
 
