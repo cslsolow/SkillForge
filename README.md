@@ -3,11 +3,10 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![SWE-bench](https://img.shields.io/badge/SWE--bench-Verified-brightgreen.svg)](https://www.swebench.com/)
 [![Docker](https://img.shields.io/badge/docker-SWE--bench%20eval-blue.svg?logo=docker)](https://www.docker.com/)
-[![Built on mini-swe-agent](https://img.shields.io/badge/built%20on-mini--swe--agent-purple.svg)](https://github.com/princeton-nlp/mini-swe-agent)
 
 SWE-Learner is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
 
-It extends [mini-swe-agent](https://github.com/princeton-nlp/mini-swe-agent) with two additional components:
+It extends **mini-swe-agent** with two additional components:
 
 - **`synthesis/`** — proactively generate buggy instances for any GitHub repository and collect repair trajectories
 - **`distilling/`** — self-distill structured *keypoints* and *environment knowledge* from those trajectories
@@ -50,9 +49,6 @@ SWE-Learner/
     experience_extractor.py    Stage ① main extraction pipeline
     repo_aggregator.py         Stage ② repo-level aggregation
     leakage_filter.py          Stage ③ evaluation-safety filter
-
-  private/
-    retrieval.py               BM25Retriever (used by the agent at inference)
 ```
 
 ---
@@ -188,5 +184,5 @@ mini-swe-agent run-swebench \
 
 ## 🙏 Acknowledgements
 
-SWE-Learner builds on [mini-swe-agent](https://github.com/SWE-agent/mini-SWE-agent) for the agent infrastructure and uses [SWE-bench](https://www.swebench.com) as the evaluation benchmark. We thank the respective authors for making their work openly available.
+SWE-Learner builds on **mini-swe-agent** for the agent infrastructure and uses **SWE-bench** as the evaluation benchmark. We thank the respective authors for making their work openly available.
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Serialized in trajectories / merged JSONL from distilling
 SYNTHESIZED_EXPERIENCE_KIND = "synthesized_experience"
-# Older runs used this internal label; still accepted when loading
+# Back-compat only: trajectories / merged JSONL written before the rename used this `kind` value.
 _LEGACY_SYNTHESIZED_EXPERIENCE_KIND = "domain2"
 
 
