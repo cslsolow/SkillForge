@@ -6,6 +6,19 @@ import json
 import re
 from pathlib import Path
 
+# Serialized in trajectories / merged JSONL from distilling
+SYNTHESIZED_EXPERIENCE_KIND = "synthesized_experience"
+# Older runs used this internal label; still accepted when loading
+_LEGACY_SYNTHESIZED_EXPERIENCE_KIND = "domain2"
+
+
+def is_synthesized_experience_payload(record: dict | None) -> bool:
+    """True if *record* is project-synthesized experience (env knowledge + keypoints), including legacy kind."""
+    if not isinstance(record, dict):
+        return False
+    k = record.get("kind")
+    return k == SYNTHESIZED_EXPERIENCE_KIND or k == _LEGACY_SYNTHESIZED_EXPERIENCE_KIND
+
 
 def load_experience_jsonl(path: Path | str) -> dict[str, dict]:
     """Load experience JSONL file and return a mapping from instance_id to record."""
@@ -43,24 +56,24 @@ def num_from_instance_id(instance_id: str) -> int:
     return 0
 
 
-def load_domain2_experience_jsonl(
+def load_synthesized_experience_jsonl(
     *,
     keypoints_path: Path | str | None = None,
     env_knowledge_path: Path | str | None = None,
 ) -> dict[str, dict]:
     """
-    Load domain2 JSONL outputs and merge them into a single mapping keyed by either:
+    Load distilling JSONL outputs and merge them into a single mapping keyed by either:
     - instance_id (per-instance files), or
     - repo_id (repo-level aggregated files).
 
     Mapping value schema:
-      {"kind": "domain2", "keypoints": [...], "env_knowledge": [...], "instance_id"/"repo_id": ...}
+      {"kind": "synthesized_experience", "keypoints": [...], "env_knowledge": [...], "instance_id"/"repo_id": ...}
     """
     mapping: dict[str, dict] = {}
 
     def ensure(key: str, *, instance_id: str | None = None, repo_id: str | None = None) -> dict:
         if key not in mapping:
-            record: dict = {"kind": "domain2"}
+            record: dict = {"kind": SYNTHESIZED_EXPERIENCE_KIND}
             if instance_id:
                 record["instance_id"] = instance_id
             if repo_id:

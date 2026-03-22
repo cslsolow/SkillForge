@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "SWE-Learner: Learning from Experience for Software Engineering Agents"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 keywords = ["nlp", "agents", "code", "software engineering"]
 authors = [
     { name = "Anonymous" },

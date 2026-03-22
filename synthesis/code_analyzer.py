@@ -16,11 +16,11 @@ class CodeAnalyzer:
         """
         Args:
             api_key: API key (if None, read from OPENAI_API_KEY env var).
-            api_base: API base URL (if None, read from OPENAI_API_BASE env var).
+            api_base: API base URL (if None, read OPENAI_API_BASE or OPENAI_BASE_URL).
             model: Model name (if None, read from OPENAI_MODEL env var, default gpt-4).
         """
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.api_base = api_base or os.getenv("OPENAI_API_BASE")
+        self.api_base = api_base or os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4")
 
         client_kwargs = {"api_key": self.api_key}

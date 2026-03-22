@@ -9,7 +9,13 @@ from typing import Any
 from jinja2 import StrictUndefined, Template
 
 from minisweagent import Environment, Model
-from minisweagent.utils.experience import format_experience, num_from_instance_id, repo_id_from_instance_id
+from minisweagent.utils.bm25_retriever import BM25Retriever
+from minisweagent.utils.experience import (
+    format_experience,
+    is_synthesized_experience_payload,
+    num_from_instance_id,
+    repo_id_from_instance_id,
+)
 from minisweagent.utils.log import logger
 
 
@@ -77,37 +83,39 @@ class DefaultAgent:
     def run(self, task: str, experience_data: dict | None = None, **kwargs) -> tuple[str, str]:
         """Run step() until agent is finished. Return exit status & message"""
         self._experience_data = experience_data
-        self._domain2_injected_api_paths: set[str] = set()
-        self._selected_domain2_instance_ids: set[str] = set()
-        self._domain2_keypoints: list[dict[str, Any]] = []
-        self._domain2_env_knowledge: list[dict[str, Any]] = []
+        self._synthesized_experience_injected_api_paths: set[str] = set()
+        self._selected_synthesized_experience_instance_ids: set[str] = set()
+        self._synthesized_experience_keypoints: list[dict[str, Any]] = []
+        self._synthesized_experience_env_knowledge: list[dict[str, Any]] = []
 
-        if isinstance(experience_data, dict) and experience_data.get("kind") == "domain2":
+        if is_synthesized_experience_payload(experience_data):
             current_id = getattr(self, "instance_id", "")
             current_num = num_from_instance_id(current_id)
             current_repo = repo_id_from_instance_id(current_id)
-            
+
             raw_keypoints = experience_data.get("keypoints", []) or []
             if current_id:
-                self._domain2_keypoints = [
-                    kp for kp in raw_keypoints
-                    if repo_id_from_instance_id(kp.get("instance_id", "")) != current_repo 
+                self._synthesized_experience_keypoints = [
+                    kp
+                    for kp in raw_keypoints
+                    if repo_id_from_instance_id(kp.get("instance_id", "")) != current_repo
                     or num_from_instance_id(kp.get("instance_id", "")) <= current_num
                 ]
             else:
-                self._domain2_keypoints = raw_keypoints
+                self._synthesized_experience_keypoints = raw_keypoints
 
             raw_env = experience_data.get("env_knowledge", []) or []
             if current_id:
-                self._domain2_env_knowledge = [
-                    item for item in raw_env
-                    if repo_id_from_instance_id(item.get("source_instance_id", "")) != current_repo 
+                self._synthesized_experience_env_knowledge = [
+                    item
+                    for item in raw_env
+                    if repo_id_from_instance_id(item.get("source_instance_id", "")) != current_repo
                     or num_from_instance_id(item.get("source_instance_id", "")) <= current_num
                 ]
             else:
-                self._domain2_env_knowledge = raw_env
-                
-            task = self._augment_task_with_domain2_env(task)
+                self._synthesized_experience_env_knowledge = raw_env
+
+            task = self._augment_task_with_synthesized_experience_env(task)
 
         self.extra_template_vars |= {"task": task, **kwargs}
         self.messages = []
@@ -132,7 +140,7 @@ class DefaultAgent:
             raise LimitsExceeded()
 
         messages = list(self.messages)
-        if getattr(self, "_experience_data", None) and self._experience_data.get("kind") != "domain2":
+        if getattr(self, "_experience_data", None) and not is_synthesized_experience_payload(self._experience_data):
             experience_text = format_experience(self._experience_data)
             messages.append({"role": "user", "content": experience_text})
         # logger.info(f"LLM messages:\n{messages[-1]}")
@@ -146,7 +154,7 @@ class DefaultAgent:
         output = self.execute_action(parsed_action)
         observation = self.render_template(self.config.action_observation_template, output=output)
         self.add_message("user", observation)
-        self._maybe_inject_domain2_keypoints(parsed_action.get("action", ""))
+        self._maybe_inject_synthesized_experience_keypoints(parsed_action.get("action", ""))
         return output
 
     def parse_action(self, response: dict) -> dict:
@@ -194,45 +202,33 @@ class DefaultAgent:
                 )
             raise Submitted("".join(lines[1:]))
 
-    def _augment_task_with_domain2_env(self, task: str) -> str:
-        if not self._domain2_env_knowledge:
+    def _augment_task_with_synthesized_experience_env(self, task: str) -> str:
+        if not self._synthesized_experience_env_knowledge:
             return task
 
-        selected_knowledge = self._domain2_env_knowledge
+        selected_knowledge = self._synthesized_experience_env_knowledge
         top_k = getattr(self.config, "env_knowledge_top_k", 0)
-        if top_k > 0 and len(self._domain2_env_knowledge) > top_k:
+        if top_k > 0 and len(self._synthesized_experience_env_knowledge) > top_k:
             try:
-                import sys
-                from pathlib import Path
-
-                # Add private directory to path to import retrieval
-                project_root = Path(__file__).resolve().parents[3]
-                private_path = project_root / "private"
-                if str(private_path) not in sys.path:
-                    sys.path.append(str(private_path))
-
-                from retrieval import BM25Retriever
-
                 docs = []
-                for item in self._domain2_env_knowledge:
-                    # Combine fields for indexing
+                for item in self._synthesized_experience_env_knowledge:
                     content = f"{item.get('api_path', '')} {item.get('purpose', '')} {item.get('playbook', '')}"
                     docs.append(content)
 
                 retriever = BM25Retriever(docs)
                 top_indices = retriever.get_top_k(task, top_k)
-                selected_knowledge = [self._domain2_env_knowledge[i] for i in top_indices]
+                selected_knowledge = [self._synthesized_experience_env_knowledge[i] for i in top_indices]
                 logger.info(
-                    f"Filtered Env Knowledge from {len(self._domain2_env_knowledge)} to {len(selected_knowledge)} using BM25"
+                    f"Filtered Env Knowledge from {len(self._synthesized_experience_env_knowledge)} to {len(selected_knowledge)} using BM25"
                 )
             except Exception as e:
                 logger.warning(f"Failed to use BM25 for Env Knowledge filtering: {e}")
 
         for item in selected_knowledge:
             if sid := item.get("source_instance_id"):
-                self._selected_domain2_instance_ids.add(sid)
+                self._selected_synthesized_experience_instance_ids.add(sid)
 
-        self._domain2_selected_env_knowledge = selected_knowledge
+        self._synthesized_experience_selected_env_knowledge = selected_knowledge
         lines: list[str] = [task, "", "=== External Memory (Env Knowledge) ==="]
         for item in selected_knowledge:
             api_path = item.get("api_path", "")
@@ -245,27 +241,28 @@ class DefaultAgent:
                 lines.append(f"  - playbook: {playbook.strip()}")
         return "\n".join(lines).strip()
 
-    def _maybe_inject_domain2_keypoints(self, action: str) -> None:
-        if not self._domain2_keypoints:
+    def _maybe_inject_synthesized_experience_keypoints(self, action: str) -> None:
+        if not self._synthesized_experience_keypoints:
             return
         referenced_files = self._extract_py_filepaths_from_action(action)
         if not referenced_files:
             return
         triggered_items: dict[str, list[dict[str, Any]]] = {}
-        for item in self._domain2_keypoints:
+        for item in self._synthesized_experience_keypoints:
             api_path = item.get("api_path")
             instance_id = item.get("instance_id")
             if not isinstance(api_path, str) or not api_path:
                 continue
             file_part = api_path.split("::", 1)[0]
-            if (file_part in referenced_files and 
-                instance_id in self._selected_domain2_instance_ids and 
-                api_path not in self._domain2_injected_api_paths):
+            if (
+                file_part in referenced_files
+                and instance_id in self._selected_synthesized_experience_instance_ids
+                and api_path not in self._synthesized_experience_injected_api_paths
+            ):
                 triggered_items.setdefault(api_path, []).append(item)
         if not triggered_items:
             return
 
-        # Inject as a user message for the next reasoning step
         lines: list[str] = ["=== Internal Memory (Keypoints) ==="]
         for api_path, items in sorted(triggered_items.items(), key=lambda kv: kv[0]):
             lines.append(f"API: {api_path}")
@@ -276,9 +273,9 @@ class DefaultAgent:
                     if isinstance(issue, str) and issue.strip():
                         lines.append(f"- [{issue.strip()}] {exp.strip()}")
                     else:
-                         hlines.append(f"- {exp.strip()}")
+                        lines.append(f"- {exp.strip()}")
             lines.append("")
-            self._domain2_injected_api_paths.add(api_path)
+            self._synthesized_experience_injected_api_paths.add(api_path)
         self.add_message("user", "\n".join(lines).strip())
 
     @staticmethod

@@ -26,9 +26,9 @@ from minisweagent.models import get_model
 from minisweagent.run.extra.utils.batch_progress import RunBatchProgressManager
 from minisweagent.run.utils.save import save_traj
 from minisweagent.utils.experience import (
-    format_experience,
-    load_domain2_experience_jsonl,
+    SYNTHESIZED_EXPERIENCE_KIND,
     load_experience_jsonl,
+    load_synthesized_experience_jsonl,
     repo_id_from_instance_id,
 )
 from minisweagent.utils.log import add_file_handler, logger
@@ -75,19 +75,20 @@ class ProgressTrackingAgent(DefaultAgent):
         """Save traj after each step."""
         if self._traj_path:
             current_extra_info = dict(self._extra_info or {})
-            if hasattr(self, "_domain2_selected_env_knowledge"):
+            if hasattr(self, "_synthesized_experience_selected_env_knowledge"):
                 current_extra_info["experience_data"] = {
-                    "kind": "domain2",
+                    "kind": SYNTHESIZED_EXPERIENCE_KIND,
                     "repo_id": repo_id_from_instance_id(self.instance_id),
                     "env_knowledge": [
                         {k: v for k, v in item.items() if k not in ["source_instance_id", "instance_id"]}
-                        for item in self._domain2_selected_env_knowledge
+                        for item in self._synthesized_experience_selected_env_knowledge
                     ],
                     "keypoints": [
                         {k: v for k, v in kp.items() if k not in ["source_instance_id", "instance_id"]}
-                        for kp in getattr(self, "_domain2_keypoints", [])
-                        if kp.get("instance_id") in getattr(self, "_selected_domain2_instance_ids", set())
-                    ]
+                        for kp in getattr(self, "_synthesized_experience_keypoints", [])
+                        if kp.get("instance_id")
+                        in getattr(self, "_selected_synthesized_experience_instance_ids", set())
+                    ],
                 }
             save_traj(
                 self,
@@ -214,19 +215,19 @@ def process_instance(
         if extra_info is None:
             extra_info = {}
         if experience_data:
-            if agent and hasattr(agent, "_domain2_selected_env_knowledge"):
+            if agent and hasattr(agent, "_synthesized_experience_selected_env_knowledge"):
                 extra_info["experience_data"] = {
-                    "kind": "domain2",
+                    "kind": SYNTHESIZED_EXPERIENCE_KIND,
                     "repo_id": repo_id_from_instance_id(instance_id),
                     "env_knowledge": [
                         {k: v for k, v in item.items() if k not in ["source_instance_id", "instance_id"]}
-                        for item in agent._domain2_selected_env_knowledge
+                        for item in agent._synthesized_experience_selected_env_knowledge
                     ],
                     "keypoints": [
                         {k: v for k, v in kp.items() if k not in ["source_instance_id", "instance_id"]}
-                        for kp in agent._domain2_keypoints 
-                        if kp.get("instance_id") in agent._selected_domain2_instance_ids
-                    ]
+                        for kp in agent._synthesized_experience_keypoints
+                        if kp.get("instance_id") in agent._selected_synthesized_experience_instance_ids
+                    ],
                 }
             else:
                 extra_info["experience_data"] = experience_data
@@ -289,8 +290,18 @@ def main(
     config_spec: Path = typer.Option( builtin_config_dir / "extra" / "swebench.yaml", "-c", "--config", help="Path to a config file", rich_help_panel="Basic"),
     environment_class: str | None = typer.Option( None, "--environment-class", help="Environment type to use. Recommended are docker or singularity", rich_help_panel="Advanced"),
     experience: Path | None = typer.Option(None, "--experience", help="Path to experience JSONL file for context injection", rich_help_panel="Advanced"),
-    domain2_keypoints: Path | None = typer.Option(None, "--domain2-keypoints", help="Path to domain2 keypoints.jsonl (per-instance)", rich_help_panel="Advanced"),
-    domain2_env: Path | None = typer.Option(None, "--domain2-env", help="Path to domain2 env_knowledge.jsonl (per-instance)", rich_help_panel="Advanced"),
+    synthesized_experience_keypoints: Path | None = typer.Option(
+        None,
+        "--synthesized-experience-keypoints",
+        help="Path to synthesized keypoints JSONL (distilling output)",
+        rich_help_panel="Advanced",
+    ),
+    synthesized_experience_env: Path | None = typer.Option(
+        None,
+        "--synthesized-experience-env",
+        help="Path to synthesized env_knowledge JSONL (distilling output)",
+        rich_help_panel="Advanced",
+    ),
 ) -> None:
     # fmt: on
     output_path = Path(output)
@@ -324,16 +335,16 @@ def main(
         experience_map = load_experience_jsonl(experience)
         logger.info(f"Loaded {len(experience_map)} experience records from {experience}")
 
-    if domain2_keypoints or domain2_env:
-        domain2_map = load_domain2_experience_jsonl(
-            keypoints_path=domain2_keypoints,
-            env_knowledge_path=domain2_env,
+    if synthesized_experience_keypoints or synthesized_experience_env:
+        synthesized_map = load_synthesized_experience_jsonl(
+            keypoints_path=synthesized_experience_keypoints,
+            env_knowledge_path=synthesized_experience_env,
         )
-        logger.info(f"Loaded {len(domain2_map)} domain2 per-instance records")
+        logger.info(f"Loaded {len(synthesized_map)} synthesized-experience records")
         if experience_map is None:
-            experience_map = domain2_map
+            experience_map = synthesized_map
         else:
-            experience_map = {**experience_map, **domain2_map}
+            experience_map = {**experience_map, **synthesized_map}
 
     progress_manager = RunBatchProgressManager(len(instances), output_path / f"exit_statuses_{time.time()}.yaml")
 

@@ -94,9 +94,9 @@ class StrictMaskBugGenerator:
     ):
         self.repo_path = Path(repo_path).resolve()
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self.api_base = api_base or os.environ.get("OPENAI_API_BASE", "https://aihubmix.com/v1")
+        self.api_base = api_base or os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL")
         self.model = model
-        
+
         if python_path:
             self.python_path = python_path
         else:
@@ -105,8 +105,11 @@ class StrictMaskBugGenerator:
                 self.python_path = str(venv_python)
             else:
                 self.python_path = sys.executable
-        
-        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+
+        client_kwargs: dict = {"api_key": self.api_key}
+        if self.api_base:
+            client_kwargs["base_url"] = self.api_base
+        self.client = OpenAI(**client_kwargs)
         self.analyzer = CodeAnalyzer(api_key=self.api_key, api_base=self.api_base, model=model)
         
         self._parse_repo_info()

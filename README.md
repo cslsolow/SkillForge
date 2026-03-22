@@ -23,10 +23,10 @@ The agent code (with experience injection) lives in the standard `src/minisweage
 ```
 SWE-Learner/
   src/minisweagent/          mini-swe-agent core (with experience injection)
-    agents/default.py          ← _augment_task_with_domain2_env, _maybe_inject_domain2_keypoints
-    utils/experience.py        ← load_domain2_experience_jsonl
-    utils/retrieval.py         ← BM25Retriever
-    run/extra/swebench.py      ← --domain2-keypoints / --domain2-env CLI flags
+    agents/default.py          ← synthesized-experience env augmentation & keypoint injection
+    utils/experience.py        ← load_synthesized_experience_jsonl
+    utils/bm25_retriever.py    ← BM25Retriever (env knowledge top-k)
+    run/extra/swebench.py      ← --synthesized-experience-keypoints / --synthesized-experience-env
     config/extra/
       synthesis.yaml           ← local-env config for trajectory collection
       swebench_exp.yaml        ← Docker/SWE-bench config with env_knowledge_top_k = 5
@@ -171,8 +171,8 @@ Output files: `out/filtered/repo_keypoints.jsonl`, `out/filtered/repo_env_knowle
 mini-swe-agent run-swebench \
     --subset verified --split test \
     --config src/minisweagent/config/extra/swebench_exp.yaml \
-    --domain2-keypoints out/filtered/repo_keypoints.jsonl \
-    --domain2-env       out/filtered/repo_env_knowledge.jsonl \
+    --synthesized-experience-keypoints out/filtered/repo_keypoints.jsonl \
+    --synthesized-experience-env       out/filtered/repo_env_knowledge.jsonl \
     -o output/run_with_exp \
     -w 4
 ```
