@@ -475,38 +475,6 @@ print(inspect.getsource(method))
             logger.log(traceback.format_exc(), "ERROR")
             return None
     
-    def _heuristic_filter_segments(self, segments: List[Dict]) -> List[Dict]:
-        """Heuristically pre-filter segments, removing obviously unimportant ones."""
-        filtered = []
-        
-        for seg in segments:
-            score = 0
-            code = seg.get('original_code', '')
-            file_path = seg.get('file', '')
-            
-            if any(kw in code for kw in ['raise ', 'return ', 'if ', 'for ', 'while ']):
-                score += 2
-            if any(kw in code for kw in ['assert', 'error', 'exception', 'fail']):
-                score += 3
-            if 'def ' in code or 'class ' in code:
-                score += 1
-            if seg.get('extraction_type') == 'complete_function':
-                score += 1
-            
-            if any(kw in code.lower() for kw in ['import ', 'from ', '__init__', 'logger']):
-                score -= 1
-            if code.count('\n') < 3:
-                score -= 2
-            if any(pattern in file_path for pattern in ['util', 'helper', 'config', 'constant']):
-                score -= 1
-            
-            if score >= 0:
-                seg['heuristic_score'] = score
-                filtered.append(seg)
-        
-        filtered.sort(key=lambda x: x.get('heuristic_score', 0), reverse=True)
-        return filtered
-    
     def _extract_segments_with_context(
         self,
         trace_data: Dict,
@@ -515,7 +483,7 @@ print(inspect.getsource(method))
         max_lines: int = 30,
         context_lines: int = 10
     ) -> List[Dict]:
-        """Extract segments using a hybrid strategy: complete functions or executed fragments."""
+        """Extract segments directly from trace data without heuristic or hybrid strategies."""
         
         file_coverage = trace_data.get('trace_summary', {}).get('file_coverage', {})
         all_segments = []
@@ -534,118 +502,28 @@ print(inspect.getsource(method))
             except:
                 continue
             
-            executed_lines = set(int(l) for l in executed_code.keys())
-            
-            functions_and_classes = self._extract_functions_and_classes(abs_path, file_content)
-            
-            processed_lines = set()
-            
-            for func_info in functions_and_classes:
-                func_lines = set(range(func_info['start_line'], func_info['end_line'] + 1))
-                overlap = func_lines & executed_lines
-                
-                if not overlap:
-                    continue
-                
-                coverage = len(overlap) / len(func_lines) if func_lines else 0
-                
-                if self._should_extract_complete_function(func_info, coverage, len(overlap)):
-                    segment = self._create_complete_function_segment(
-                        func_info, rel_path, abs_path, file_lines, context_lines
-                    )
-                    if segment and min_lines <= segment['line_count'] <= max_lines:
-                        segment['extraction_type'] = 'complete_function'
-                        segment['coverage'] = coverage
-                        all_segments.append(segment)
-                        processed_lines.update(func_lines)
-                        logger.log(f"  Extracted complete function: {func_info['name']} "
-                                 f"({func_info['line_count']} lines, {coverage:.1%} coverage)")
-            
-            remaining_lines = executed_lines - processed_lines
-            if remaining_lines:
-                groups = self._group_consecutive_lines(sorted(remaining_lines))
-                
-                for group in groups:
-                    line_count = len(group)
-                    if line_count < min_lines or line_count > max_lines:
-                        continue
-                    
-                    start_line = min(group)
-                    end_line = max(group)
-                    
-                    segment = self._create_segment_from_lines(
-                        start_line, end_line, rel_path, abs_path, 
-                        file_lines, executed_code, context_lines
-                    )
-                    if segment:
-                        segment['extraction_type'] = 'executed_fragment'
-                        all_segments.append(segment)
-        
-        logger.log(f"Extracted {len(all_segments)} segments with hybrid strategy")
-        logger.log(f"  Complete functions: {sum(1 for s in all_segments if s.get('extraction_type') == 'complete_function')}")
-        logger.log(f"  Executed fragments: {sum(1 for s in all_segments if s.get('extraction_type') == 'executed_fragment')}")
-        
-        if len(all_segments) > 20:
-            logger.log(f"\nApplying heuristic filtering to {len(all_segments)} segments...")
-            filtered_segments = self._heuristic_filter_segments(all_segments)
-            logger.log(f"  After filtering: {len(filtered_segments)} segments")
-            return filtered_segments
+            executed_lines = sorted(int(l) for l in executed_code.keys())
+            if not executed_lines:
+                continue
+
+            start_line = min(executed_lines)
+            end_line = max(executed_lines)
+
+            segment = self._create_segment_from_lines(
+                start_line, end_line, rel_path, abs_path,
+                file_lines, executed_code, context_lines
+            )
+            if segment:
+                segment['extraction_type'] = 'trace_span'
+                all_segments.append(segment)
+                logger.log(
+                    f"  Extracted trace span: {rel_path} lines {start_line}-{end_line} "
+                    f"({segment['line_count']} lines)"
+                )
+
+        logger.log(f"Extracted {len(all_segments)} segments directly from trace spans")
         
         return all_segments
-    
-    def _extract_functions_and_classes(self, file_path: str, source: str) -> List[Dict]:
-        """Extract all function and class definitions from a file using AST."""
-        try:
-            tree = ast.parse(source)
-        except:
-            return []
-        
-        functions = []
-        
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                func_info = {
-                    'name': node.name,
-                    'type': type(node).__name__,
-                    'start_line': node.lineno,
-                    'end_line': node.end_lineno,
-                    'line_count': node.end_lineno - node.lineno + 1,
-                    'has_docstring': ast.get_docstring(node) is not None,
-                    'is_class': isinstance(node, ast.ClassDef),
-                    'is_async': isinstance(node, ast.AsyncFunctionDef)
-                }
-                functions.append(func_info)
-        
-        functions.sort(key=lambda x: x['start_line'])
-        return functions
-    
-    def _should_extract_complete_function(
-        self, 
-        func_info: Dict, 
-        coverage: float,
-        executed_line_count: int
-    ) -> bool:
-        """Return True if the complete function should be extracted.
-
-        Decision is based on objective coverage and function size,
-        without relying on function-name heuristics.
-        """
-        
-        line_count = func_info['line_count']
-        
-        if line_count <= 20:
-            return True
-        
-        if line_count <= 50 and coverage >= 0.7:
-            return True
-        
-        if line_count <= 50 and coverage >= 0.5 and executed_line_count >= 10:
-            return True
-        
-        if func_info['is_class'] and line_count <= 40:
-            return True
-        
-        return False
     
     def _create_complete_function_segment(
         self,
@@ -722,128 +600,6 @@ print(inspect.getsource(method))
             'code_summary': executed_code
         }
     
-    def _group_consecutive_lines(self, line_numbers: List[int]) -> List[List[int]]:
-        if not line_numbers:
-            return []
-        
-        sorted_lines = sorted(line_numbers)
-        groups = []
-        current_group = [sorted_lines[0]]
-        
-        for line in sorted_lines[1:]:
-            if line == current_group[-1] + 1:
-                current_group.append(line)
-            else:
-                groups.append(current_group)
-                current_group = [line]
-        
-        groups.append(current_group)
-        return groups
-    
-    def _identify_critical_segments_batch(
-        self,
-        segments: List[Dict],
-        test_description: Dict,
-        batch_size: int,
-        selections_per_batch: int,
-        logger: DetailedLogger
-    ) -> Tuple[List[Dict], str]:
-        """Select critical segments in batches to avoid missing important ones."""
-        
-        system_prompt = """You are a code analysis expert. Identify the core logic segments of a test case.
-Select those that:
-1. Directly affect the test outcome
-2. Contain conditional checks, exception raising, or return values
-3. Are not simple initialization or utility functions"""
-
-        all_selected = []
-        all_prompts = []
-        
-        num_batches = (len(segments) + batch_size - 1) // batch_size
-        logger.log(f"  Splitting {len(segments)} segments into {num_batches} batches")
-        
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min((batch_idx + 1) * batch_size, len(segments))
-            batch_segments = segments[start_idx:end_idx]
-            
-            logger.log(f"  \n  Batch {batch_idx + 1}/{num_batches}: analyzing segments {start_idx + 1}-{end_idx}")
-            
-            segments_text = ""
-            for i, seg in enumerate(batch_segments):
-                segments_text += f"""
----
-Segment {i+1}:
-File: {seg['file']}
-Lines: {seg['start_line']}-{seg['end_line']} ({seg['line_count']} lines)
-```python
-{seg['original_code']}
-```
-"""
-            
-            prompt = f"""Test purpose: {test_description.get('purpose', 'N/A')}
-Test scenario: {test_description.get('scenario', 'N/A')}
-
-Segment list (batch {batch_idx + 1}/{num_batches}):
-{segments_text}
-
-Select the {selections_per_batch} most critical segments from this batch — those whose modification is most likely to cause the test to fail.
-
-Evaluation criteria:
-1. Core logic directly involved in the test scenario
-2. Contains key conditional checks, data processing, or return values
-3. Not a simple helper function or configuration code
-
-For each selected segment, assess its importance (confidence):
-- 0.9-1.0: Core logic, almost certain to affect the test
-- 0.7-0.89: Important logic, likely to affect the test
-- 0.5-0.69: Related logic, may affect the test
-
-Return a JSON array sorted by importance:
-```json
-[
-  {{"segment_id": <number>, "reason": "<detailed explanation>", "confidence": <value between 0.5-1.0>}},
-  {{"segment_id": <number>, "reason": "<explanation>", "confidence": <value>}}
-]
-```
-
-Note: segment_id is the segment number (1 to {len(batch_segments)}). Analyze carefully before selecting."""
-            
-            all_prompts.append(f"=== Batch {batch_idx + 1} ===\n{prompt}")
-            
-            try:
-                response = self._call_llm(prompt, system_prompt)
-                all_prompts.append(f"\n=== Batch {batch_idx + 1} Response ===\n{response}\n")
-                
-                rankings = self._parse_rankings(response)
-                
-                if not rankings:
-                    logger.log(f"    WARNING: No rankings parsed from batch {batch_idx + 1} response", "WARN")
-                    logger.log(f"    Response preview: {response[:200]}...", "WARN")
-                else:
-                    logger.log(f"    Parsed {len(rankings)} rankings from batch {batch_idx + 1}")
-                
-                for rank in rankings[:selections_per_batch]:
-                    seg_id = rank.get('segment_id', 0) - 1
-                    if 0 <= seg_id < len(batch_segments):
-                        seg = batch_segments[seg_id].copy()
-                        seg['reason'] = rank.get('reason', '')
-                        seg['confidence'] = rank.get('confidence', 0)
-                        seg['batch'] = batch_idx + 1
-                        all_selected.append(seg)
-                        logger.log(f"    Selected (batch {batch_idx + 1}): segment_id={rank.get('segment_id')}, confidence={rank.get('confidence'):.2f}")
-                        logger.log(f"      -> {seg['file']} lines {seg['start_line']}-{seg['end_line']}")
-                    else:
-                        logger.log(f"    WARNING: Invalid segment_id {rank.get('segment_id')} in batch {batch_idx + 1} (valid range: 1-{len(batch_segments)})", "WARN")
-            except Exception as e:
-                logger.log(f"    Error in batch {batch_idx + 1}: {e}", "ERROR")
-                import traceback
-                logger.log(traceback.format_exc(), "ERROR")
-        
-        all_selected.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-        
-        return all_selected, "\n\n".join(all_prompts)
-    
     def _identify_critical_segments(
         self,
         segments: List[Dict],
@@ -851,21 +607,7 @@ Note: segment_id is the segment number (1 to {len(batch_segments)}). Analyze car
         top_k: int,
         logger: DetailedLogger
     ) -> Tuple[List[Dict], str, str]:
-        """Identify critical code segments, with optional batch selection for large sets."""
-        
-        if len(segments) > 30:
-            logger.log(f"Using batch selection strategy for {len(segments)} segments")
-            batch_size = 15
-            selections_per_batch = max(2, top_k // 3)
-            
-            critical_segments, combined_prompts = self._identify_critical_segments_batch(
-                segments, test_description, batch_size, selections_per_batch, logger
-            )
-            
-            critical_segments = critical_segments[:top_k]
-            logger.log(f"\n  Final selection: {len(critical_segments)} segments")
-            
-            return critical_segments, combined_prompts, "Multiple batch responses"
+        """Identify top-k critical code segments by sending all traced segments to the LLM."""
         
         system_prompt = """You are a code analysis expert. Identify the core logic segments of a test case.
 Select those that:
@@ -874,7 +616,7 @@ Select those that:
 3. Are not simple initialization or utility functions"""
 
         segments_text = ""
-        for i, seg in enumerate(segments[:20]):
+    for i, seg in enumerate(segments):
             segments_text += f"""
 ---
 Segment {i+1}:
@@ -906,7 +648,7 @@ For each selected segment, assess its importance (confidence):
 Return a JSON array sorted by importance:
 ```json
 [
-  {{"segment_id": <number between 1 and {min(20, len(segments))}>, "reason": "<detailed explanation>", "confidence": <value between 0.5-1.0>}}
+    {{"segment_id": <number between 1 and {len(segments)}>, "reason": "<detailed explanation>", "confidence": <value between 0.5-1.0>}}
 ]
 ```"""
         
