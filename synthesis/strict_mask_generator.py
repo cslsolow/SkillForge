@@ -161,9 +161,13 @@ class StrictMaskBugGenerator:
     
     def _verify_test_passes(self, test_command: str, logger: DetailedLogger) -> bool:
         logger.log("Verifying test passes on original code...")
-        
-        test_command_fixed = test_command.replace('python ', f'{self.python_path} ')
-        
+
+        # Replace only the python command at the start
+        if test_command.startswith('python '):
+            test_command_fixed = f'{self.python_path} ' + test_command[7:]
+        else:
+            test_command_fixed = test_command
+
         try:
             cmd_list = shlex.split(test_command_fixed)
         except ValueError as e:
@@ -263,10 +267,11 @@ class StrictMaskBugGenerator:
         
         logger.section("PHASE 4: STRICT MASK CODE GENERATION")
         logger.log("LLM will NOT see the original code, only context!")
-        
+
         test_description = trace_data.get('test_description', {})
         test_code = trace_data.get('test_code', '')
-        
+        other_tests = trace_data.get('other_tests', [])
+
         all_attempts: List[BugAttempt] = []
         successful_bugs: List[SuccessfulBug] = []
         
@@ -312,13 +317,15 @@ class StrictMaskBugGenerator:
                     continue
                 
                 logger.log(f"    Generated code:\n{generated_code}")
-                
+
                 result = self._verify_bug(
                     segment['absolute_path'],
                     segment['original_code'],
                     generated_code,
                     test_command,
-                    logger
+                    logger,
+                    segment['start_line'],
+                    segment['end_line']
                 )
                 
                 attempt.is_valid_bug = result['is_logic_bug']
@@ -361,10 +368,11 @@ class StrictMaskBugGenerator:
             return None
         
         logger.log(f"Found {len(successful_bugs)} valid bugs to combine")
-        
+
         result = self._generate_combined_output(
             successful_bugs, test_description, test_code, test_full_name,
-            test_command, all_attempts, test_output_dir, logger, swebench_metadata
+            test_command, all_attempts, test_output_dir, logger, swebench_metadata,
+            other_tests
         )
         
         root_output_dir = Path(output_dir)
@@ -420,55 +428,119 @@ print(inspect.getsource(method))
             logger.log(f"\nTest code:\n{test_code}")
             
             test_description = self.analyzer.analyze_test_description(test_method, test_code)
-            
-            # Use pytest plugin to trace
-            # Build test path
+
+            # Use pytest to collect all tests in the same file
             test_file = test_module.replace('.', '/') + '.py'
+            test_file_path = self.repo_path / test_file
+
+            if test_file_path.exists():
+                collect_cmd = [self.python_path, '-m', 'pytest', '--collect-only', '-q', str(test_file_path)]
+                try:
+                    collect_result = subprocess.run(
+                        collect_cmd, cwd=self.repo_path, capture_output=True, text=True, timeout=30
+                    )
+                    # Parse collected test names from pytest output
+                    all_tests = []
+                    for line in collect_result.stdout.splitlines():
+                        if '::' in line and not line.startswith(' '):
+                            all_tests.append(line.strip())
+
+                    # Filter out the current test
+                    other_tests = [t for t in all_tests if test_method not in t]
+                    logger.log(f"Found {len(other_tests)} other tests in {test_file}")
+                except Exception as e:
+                    logger.log(f"Failed to collect tests: {e}", "WARN")
+                    other_tests = []
+            else:
+                other_tests = []
+
+            # Build test path for tracing
             if test_class:
                 test_path = f"{test_file}::{test_class}::{test_method}"
             else:
                 test_path = f"{test_file}::{test_method}"
-            
+
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
                 trace_output = f.name
-            
-            plugin_path = Path(__file__).parent / "pytest_tracer_plugin.py"
-            
+
             env = os.environ.copy()
-            env['PYTHONPATH'] = f"{Path(__file__).parent}:{env.get('PYTHONPATH', '')}"
-            
+            env['PYTHONPATH'] = f"{self.repo_path}:{env.get('PYTHONPATH', '')}"
+
+            # Run the target test with coverage tracing using pytest's --trace option
+            # If pytest_tracer_plugin is not available, use coverage.py as fallback
+            trace_cmd = [
+                self.python_path, '-m', 'coverage', 'run',
+                '--source', str(self.repo_path),
+                '-m', 'pytest', test_path, '-xvs'
+            ]
+
             result = subprocess.run(
-                [self.python_path, '-m', 'pytest',
-                 '-p', 'pytest_tracer_plugin',
-                 '--trace-output', trace_output,
-                 '--trace-repo', str(self.repo_path),
-                 test_path, '-xvs'],
+                trace_cmd,
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
                 timeout=1000,
                 env=env
             )
-            
+
+            # Generate coverage report in JSON format
+            coverage_json = self.repo_path / '.coverage_report.json'
+            subprocess.run(
+                [self.python_path, '-m', 'coverage', 'json', '-o', str(coverage_json)],
+                cwd=self.repo_path,
+                capture_output=True,
+                timeout=60
+            )
+
+            trace_summary = {'total_files': 0, 'file_coverage': {}}
+            if coverage_json.exists():
+                try:
+                    coverage_data = json.loads(coverage_json.read_text())
+                    files = coverage_data.get('files', {})
+
+                    for filepath, file_data in files.items():
+                        rel_path = str(Path(filepath).relative_to(self.repo_path))
+                        executed_lines = file_data.get('executed_lines', [])
+
+                        if executed_lines:
+                            executed_code = {}
+                            try:
+                                with open(filepath, 'r', encoding='utf-8') as f:
+                                    file_lines = f.readlines()
+                                for line_num in executed_lines:
+                                    if 0 < line_num <= len(file_lines):
+                                        executed_code[str(line_num)] = file_lines[line_num - 1].rstrip()
+                            except Exception:
+                                pass
+
+                            trace_summary['file_coverage'][rel_path] = {
+                                'absolute_path': filepath,
+                                'executed_lines': executed_lines,
+                                'total_executed_lines': len(executed_lines),
+                                'executed_code': executed_code
+                            }
+
+                    trace_summary['total_files'] = len(trace_summary['file_coverage'])
+                    coverage_json.unlink()
+                except Exception as e:
+                    logger.log(f"Failed to parse coverage data: {e}", "WARN")
+
             if os.path.exists(trace_output):
-                with open(trace_output, 'r') as f:
-                    trace_summary = json.load(f)
                 os.unlink(trace_output)
-            else:
-                trace_summary = {'total_files': 0, 'file_coverage': {}}
             
             logger.log(f"Traced {trace_summary.get('total_files', 0)} files")
-            
+
             return {
                 'test_module': test_module,
                 'test_class': test_class,
                 'test_method': test_method,
                 'test_code': test_code,
                 'test_description': test_description,
-                'trace_summary': trace_summary
+                'trace_summary': trace_summary,
+                'other_tests': other_tests
             }
-            
+
         except Exception as e:
             logger.log(f"Error: {e}", "ERROR")
             import traceback
@@ -616,7 +688,7 @@ Select those that:
 3. Are not simple initialization or utility functions"""
 
         segments_text = ""
-    for i, seg in enumerate(segments):
+        for i, seg in enumerate(segments):
             segments_text += f"""
 ---
 Segment {i+1}:
@@ -728,28 +800,16 @@ Return a JSON array sorted by importance:
         
         extraction_type = segment.get('extraction_type', 'executed_fragment')
         is_complete_function = extraction_type == 'complete_function'
-        
+
         if is_complete_function:
-            strategies = [
-                "Implement the functionality but may use a simpler algorithm and omit some boundary checks.",
-                "Implement the core logic but may simplify error handling and special-case processing.",
-                "Implement the main functionality in the most straightforward way without considering all edge cases.",
-            ]
             func_name = segment.get('function_name', 'unknown')
             has_docstring = segment.get('has_docstring', False)
             extra_context = f"Function name: {func_name}"
             if has_docstring:
                 extra_context += " (has docstring — use context to infer purpose)"
         else:
-            strategies = [
-                "Infer from context what this code should do, then implement it. Keep it concise.",
-                "Implement this code from context. You may omit some boundary checks.",
-                "Implement this code from context. Use the most direct approach to complete the function.",
-            ]
             extra_context = ""
-        
-        strategy = strategies[attempt % len(strategies)]
-        
+
         if is_complete_function:
             system_prompt = f"""You are a Python developer. You need to implement a complete function/method.
 
@@ -757,13 +817,11 @@ Key rules:
 1. You cannot see the original implementation — infer its purpose from context (function signature, docstring, surrounding code).
 2. Base indentation is {base_indent} spaces (the indentation of the function definition line).
 3. Code must be syntactically correct, runnable, and semantically complete.
-4. {strategy}
-5. {extra_context}
+4. {extra_context}
 
 For this complete function/method, you must:
 - Understand the function's intent (infer from name, parameters, and context).
 - Implement the core functional logic.
-- A simplified implementation is acceptable.
 - The generated code must be a semantically complete block — do not use pass as a placeholder.
 
 Indentation example:
@@ -777,8 +835,7 @@ Key rules:
 1. You cannot see the original code — infer it from context only.
 2. Base indentation is {base_indent} spaces.
 3. Code must be syntactically correct, runnable, and semantically complete.
-4. {strategy}
-5. The generated code must be a natural code block — do not fill with multiple pass statements.
+4. The generated code must be a natural code block — do not fill with multiple pass statements.
 
 Indentation example:
 {indent_str}first line of code
@@ -893,47 +950,39 @@ Generate a semantically complete code block:
         return self._fix_indentation_semantic(code, base_indent)
     
     def _fix_indentation_semantic(self, code: str, base_indent: int) -> str:
-        """Fix code indentation while preserving semantic completeness.
+        """Fix code indentation while preserving original structure.
 
         Strategy:
-        1. Strip all leading whitespace.
-        2. Rebuild indentation based on code structure (lines ending with ':' increase indent).
-        3. Enforce at least base_indent on every line.
-        4. Do not add pass statements; preserve semantic completeness.
+        1. Detect the minimum indentation in the generated code
+        2. Adjust all lines by the difference to match base_indent
+        3. Preserve relative indentation between lines
         """
-        
-        lines = code.split('\n')
-        
-        lines = [l.strip() for l in lines if l.strip()]
-        
-        if not lines:
+
+        if not code.strip():
             return ' ' * base_indent + 'pass'
-        
+
+        lines = code.split('\n')
+        non_empty_lines = [line for line in lines if line.strip()]
+
+        if not non_empty_lines:
+            return ' ' * base_indent + 'pass'
+
+        # Find minimum indentation (excluding empty lines)
+        min_indent = min(len(line) - len(line.lstrip()) for line in non_empty_lines)
+
+        # Calculate adjustment needed
+        indent_adjustment = base_indent - min_indent
+
+        # Apply adjustment to all lines, preserving relative indentation
         fixed_lines = []
-        current_indent = base_indent
-        indent_stack = [base_indent]
-        
-        for i, line in enumerate(lines):
-            dedent_keywords = ('return ', 'return', 'pass', 'break', 'continue', 
-                              'raise ', 'raise')
-            block_continue_keywords = ('else:', 'elif ', 'except:', 'except ', 'finally:')
-            
-            stripped = line.strip()
-            
-            if stripped.startswith(block_continue_keywords):
-                if len(indent_stack) > 1:
-                    current_indent = indent_stack[-2]
-            
-            fixed_lines.append(' ' * current_indent + stripped)
-            
-            if stripped.endswith(':'):
-                current_indent = current_indent + 4
-                indent_stack.append(current_indent)
-            elif stripped.startswith(dedent_keywords) and not stripped.endswith(':'):
-                if len(indent_stack) > 1:
-                    indent_stack.pop()
-                    current_indent = indent_stack[-1]
-        
+        for line in lines:
+            if line.strip():  # Non-empty line
+                current_indent = len(line) - len(line.lstrip())
+                new_indent = max(0, current_indent + indent_adjustment)
+                fixed_lines.append(' ' * new_indent + line.lstrip())
+            else:  # Empty line
+                fixed_lines.append('')
+
         return '\n'.join(fixed_lines)
     
     def _extract_code(self, response: str) -> str:
@@ -968,27 +1017,37 @@ Generate a semantically complete code block:
         original_code: str,
         generated_code: str,
         test_command: str,
-        logger: DetailedLogger
+        logger: DetailedLogger,
+        start_line: int,
+        end_line: int
     ) -> Dict:
         """Verify whether the generated code introduces a logic bug."""
-        
+
         result = {
             'is_logic_bug': False,
             'error_type': '',
             'error_message': ''
         }
-        
+
         with open(file_path, 'r', encoding='utf-8') as f:
-            original_file_content = f.read()
-        
+            file_lines = f.readlines()
+
+        original_file_content = ''.join(file_lines)
+
         try:
-            if original_code not in original_file_content:
-                result['error_type'] = 'code_not_found'
-                result['error_message'] = 'Original code not found in file (position drift?)'
-                logger.log(f"    WARNING: Original code not found in file!")
+            # Use line-based replacement instead of string replacement
+            if start_line < 1 or end_line > len(file_lines):
+                result['error_type'] = 'invalid_line_range'
+                result['error_message'] = f'Line range {start_line}-{end_line} out of bounds'
                 return result
-            
-            modified_content = original_file_content.replace(original_code, generated_code, 1)
+
+            # Replace lines based on line numbers
+            modified_lines = (
+                file_lines[:start_line-1] +
+                [generated_code + '\n'] +
+                file_lines[end_line:]
+            )
+            modified_content = ''.join(modified_lines)
             
             try:
                 ast.parse(modified_content)
@@ -999,8 +1058,12 @@ Generate a semantically complete code block:
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(modified_content)
-            
-            test_command_fixed = test_command.replace('python ', f'{self.python_path} ')
+
+            # Replace only the python command at the start
+            if test_command.startswith('python '):
+                test_command_fixed = f'{self.python_path} ' + test_command[7:]
+            else:
+                test_command_fixed = test_command
             test_result = subprocess.run(
                 test_command_fixed,
                 shell=True,
@@ -1020,8 +1083,8 @@ Generate a semantically complete code block:
                 
         except subprocess.TimeoutExpired:
             result['error_type'] = 'timeout'
-            result['is_logic_bug'] = True
-            result['error_message'] = 'Test timeout'
+            result['is_logic_bug'] = False  # Timeout is not a reliable logic bug indicator
+            result['error_message'] = 'Test timeout - may be environment issue or infinite loop'
         except Exception as e:
             result['error_type'] = 'error'
             result['error_message'] = str(e)
@@ -1041,7 +1104,8 @@ Generate a semantically complete code block:
         all_attempts: List[BugAttempt],
         output_dir: Path,
         logger: DetailedLogger,
-        swebench_metadata: Optional[Dict] = None
+        swebench_metadata: Optional[Dict] = None,
+        other_tests: List[str] = None
     ) -> Dict:
         """Generate combined output from all successful bugs."""
         
@@ -1051,18 +1115,35 @@ Generate a semantically complete code block:
             if file_path not in files_content:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     files_content[file_path] = f.read()
-        
+
         buggy_contents: Dict[str, str] = {}
         for file_path, content in files_content.items():
-            buggy_content = content
-            for bug in successful_bugs:
-                if bug.segment['absolute_path'] == file_path:
-                    buggy_content = buggy_content.replace(bug.original_code, bug.buggy_code, 1)
-            buggy_contents[file_path] = buggy_content
+            file_lines = content.splitlines(keepends=True)
+
+            # Sort bugs by line number (descending) to avoid line number shifts
+            bugs_for_file = [b for b in successful_bugs if b.segment['absolute_path'] == file_path]
+            bugs_for_file.sort(key=lambda b: b.segment['start_line'], reverse=True)
+
+            for bug in bugs_for_file:
+                start_line = bug.segment['start_line']
+                end_line = bug.segment['end_line']
+
+                if start_line >= 1 and end_line <= len(file_lines):
+                    file_lines = (
+                        file_lines[:start_line-1] +
+                        [bug.buggy_code + '\n'] +
+                        file_lines[end_line:]
+                    )
+
+            buggy_contents[file_path] = ''.join(file_lines)
         
         logger.log("Verifying combined patch...")
         combined_works = False
-        test_command_fixed = test_command.replace('python ', f'{self.python_path} ')
+        # Replace only the python command at the start
+        if test_command.startswith('python '):
+            test_command_fixed = f'{self.python_path} ' + test_command[7:]
+        else:
+            test_command_fixed = test_command
         try:
             for file_path, content in buggy_contents.items():
                 with open(file_path, 'w', encoding='utf-8') as f:
@@ -1150,7 +1231,10 @@ Generate a semantically complete code block:
         else:
             # Fallback: generate simple numeric ID
             instance_id = f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        
+
+        # Use other tests in the same file as PASS_TO_PASS
+        pass_to_pass = other_tests if other_tests else []
+
         instance = {
             "instance_id": instance_id,
             "repo": f"{self.repo_owner}/{self.repo_name}",
@@ -1160,7 +1244,7 @@ Generate a semantically complete code block:
             "hints_text": "",
             "created_at": datetime.now().isoformat(),
             "FAIL_TO_PASS": json.dumps([test_full_name]),
-            "PASS_TO_PASS": json.dumps([]),
+            "PASS_TO_PASS": json.dumps(pass_to_pass),
             "buggy_patch": combined_buggy_patch,
             "bug_count": len(successful_bugs),
             "modified_files": list(set(b.segment['file'] for b in successful_bugs))
@@ -1232,15 +1316,13 @@ Generate a semantically complete code block:
         else:
             error_summary = test_error_output.strip()
         
-        prompt = f"""You are a technical documentation expert. Write a GitHub issue IN ENGLISH based on code changes and error information.
-
-**CRITICAL: You MUST write the entire issue in English. Do NOT use Chinese or any other language.**
+        prompt = f"""You are a technical documentation expert. Write a GitHub issue based on code changes and error information.
 
 ## Task Description
 
-Based on the following information, **reverse-engineer** what problems users will encounter when using this library, and write an issue.
+Based on the following information, reverse-engineer what problems users will encounter when using this library, and write an issue.
 
-**Important**: Analyze each bug's code changes, understand what problems they will cause individually, and then provide a comprehensive description.
+Analyze each bug's code changes, understand what problems they will cause individually, and then provide a comprehensive description.
 
 ## Feature Context
 
@@ -1263,29 +1345,28 @@ Related test code:
 
 ## Writing Requirements
 
-1. **Analyze each bug's impact** - Infer what problems each bug will cause based on code changes
-2. **Comprehensive problem description** - Integrate all bugs' impacts into a problem description from user's perspective
-3. **Write from user's viewpoint** - Users don't know where the specific bugs are, can only describe observed abnormal behavior
-4. **Don't provide reproduction steps** - Avoid giving potentially incorrect code examples
-5. **Expected vs Actual** - Clearly contrast expected behavior and actual behavior
-6. **Can mention multiple issues** - If different bugs cause different anomalies, mention them all
-7. **USE ENGLISH ONLY** - The entire issue must be written in English
+1. Analyze each bug's impact - Infer what problems each bug will cause based on code changes
+2. Comprehensive problem description - Integrate all bugs' impacts into a problem description from user's perspective
+3. Write from user's viewpoint - Users don't know where the specific bugs are, can only describe observed abnormal behavior
+4. Don't provide reproduction steps - Avoid giving potentially incorrect code examples
+5. Expected vs Actual - Clearly contrast expected behavior and actual behavior
+6. Can mention multiple issues - If different bugs cause different anomalies, mention them all
 
 ## Output Format
 
-Use Markdown format in ENGLISH, including:
+Use Markdown format, including:
 - Title (starting with #, summarizing main problem)
 - Problem description (describing encountered abnormalities, can include multiple aspects)
 - Expected behavior
 - Actual behavior (can list multiple abnormal phenomena)
 - Error messages (if there are clear error types)
 
-**Do NOT include**:
+Do NOT include:
 - Reproduction steps
 - Specific code examples
 - Environment information
 
-Directly output the issue content without additional explanations.
+Output the issue content directly without additional explanations.
 """
         
         system_prompt = """You are an experienced developer reporting a bug.

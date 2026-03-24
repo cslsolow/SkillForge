@@ -6,15 +6,30 @@ the same instances being evaluated must not appear in the corpus (golden-patch
 leakage).  This script reads a directory of instance folders (used as an
 exclude list), then copies only the non-excluded records from a source
 experience directory into a destination directory.
+
+Filtering rules:
+1. Exclude experiences from the same instance_id as evaluation instances
+2. Exclude experiences from instances with higher numbers in the same repo
+   (temporal leakage: synthetic issues created after real issues)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
-_EXPERIENCE_FILES = ("keypoints.jsonl", "env_knowledge.jsonl")
+_EXPERIENCE_FILES = ("repo_keypoints.jsonl", "repo_env_knowledge.jsonl")
+_INSTANCE_RE = re.compile(r"^(?P<repo>.+)-(?P<num>\d+)$")
+
+
+def parse_instance_id(instance_id: str) -> tuple[str, int]:
+    """Parse instance_id into (repo_id, number). Returns ('', 0) if invalid."""
+    match = _INSTANCE_RE.match(instance_id.strip())
+    if match:
+        return match.group("repo"), int(match.group("num"))
+    return instance_id.strip(), 0
 
 
 def filter_and_append(
@@ -26,7 +41,7 @@ def filter_and_append(
     Parameters
     ----------
     exclude_dir : directory whose sub-folder names are instance IDs to exclude.
-    src_dir     : source directory containing keypoints.jsonl / env_knowledge.jsonl.
+    src_dir     : source directory containing repo_keypoints.jsonl / repo_env_knowledge.jsonl.
     dst_dir     : destination directory; filtered records are *appended* to any
                   existing files there.
     """
@@ -35,9 +50,17 @@ def filter_and_append(
     dst_dir = Path(dst_dir)
 
     exclude_ids: set[str] = set()
+    exclude_map: dict[str, int] = {}
     if exclude_dir.exists():
-        exclude_ids = {d.name for d in exclude_dir.iterdir() if d.is_dir()}
+        for d in exclude_dir.iterdir():
+            if d.is_dir():
+                exclude_ids.add(d.name)
+                repo_id, num = parse_instance_id(d.name)
+                if num > 0:
+                    exclude_map[repo_id] = min(exclude_map.get(repo_id, float('inf')), num)
+
     print(f"Loaded {len(exclude_ids)} instance IDs to exclude from {exclude_dir}.")
+    print(f"Temporal filter: {len(exclude_map)} repos with min instance numbers.")
 
     for filename in _EXPERIENCE_FILES:
         src_file = src_dir / filename
@@ -56,8 +79,29 @@ def filter_and_append(
                     continue
                 try:
                     data = json.loads(line)
-                    if data.get("instance_id") not in exclude_ids:
-                        filtered_lines.append(line if line.endswith("\n") else line + "\n")
+                    items = data.get("items", [])
+                    if not isinstance(items, list):
+                        continue
+
+                    filtered_items = []
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+
+                        source_id = item.get("source_instance_id", "")
+                        if source_id in exclude_ids:
+                            continue
+
+                        source_repo, source_num = parse_instance_id(source_id)
+                        if source_repo in exclude_map and source_num > exclude_map[source_repo]:
+                            continue
+
+                        filtered_items.append(item)
+
+                    if filtered_items:
+                        data["items"] = filtered_items
+                        filtered_lines.append(json.dumps(data, ensure_ascii=False) + "\n")
+
                 except json.JSONDecodeError:
                     continue
 
@@ -75,8 +119,8 @@ def filter_and_append(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Filter per-instance experience records to prevent golden-patch leakage, "
-            "then append surviving records to a destination directory."
+            "Filter per-instance experience records to prevent golden-patch leakage "
+            "and temporal leakage, then append surviving records to a destination directory."
         )
     )
     parser.add_argument(
@@ -85,7 +129,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--src-dir", required=True,
-        help="Source directory containing keypoints.jsonl / env_knowledge.jsonl.",
+        help="Source directory containing repo_keypoints.jsonl / repo_env_knowledge.jsonl.",
     )
     parser.add_argument(
         "--dst-dir", required=True,

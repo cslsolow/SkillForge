@@ -28,12 +28,14 @@ def run_tests_for_instance(instance_id: str, tests: list, repos_dir: Path, timeo
             "total_tests": len(tests),
             "passed": 0,
             "failed": 0,
-            "errors": len(tests),
+            "errors": 0,
             "error": "Virtual environment not found",
             "test_results": {},
+            "verified_tests": []
         }
 
     test_results = {}
+    verified_tests = []
     passed = failed = errors = 0
 
     for test_path in tests:
@@ -41,19 +43,20 @@ def run_tests_for_instance(instance_id: str, tests: list, repos_dir: Path, timeo
         try:
             result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=timeout)
             if result.returncode == 0:
-                test_results[test_path] = "PASSED"
+                test_results[test_path] = {"status": "PASSED", "output": ""}
+                verified_tests.append(test_path)
                 passed += 1
                 logger.info(f"  ✓ {test_path}")
             else:
-                test_results[test_path] = "FAILED"
+                test_results[test_path] = {"status": "FAILED", "output": result.stdout + result.stderr}
                 failed += 1
                 logger.warning(f"  ✗ {test_path}")
         except subprocess.TimeoutExpired:
-            test_results[test_path] = "TIMEOUT"
+            test_results[test_path] = {"status": "TIMEOUT", "output": f"Test timed out after {timeout}s"}
             errors += 1
             logger.error(f"  ⏱ {test_path}")
         except Exception as e:
-            test_results[test_path] = f"ERROR: {e}"
+            test_results[test_path] = {"status": "ERROR", "output": str(e)}
             errors += 1
             logger.error(f"  ⚠ {test_path}: {e}")
 
@@ -64,6 +67,7 @@ def run_tests_for_instance(instance_id: str, tests: list, repos_dir: Path, timeo
         "failed": failed,
         "errors": errors,
         "test_results": test_results,
+        "verified_tests": verified_tests
     }
 
 
@@ -98,8 +102,19 @@ def main():
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(json.dumps(results, indent=2))
 
+    # Create a simplified mapping for generate_bugs.py: instance_id -> [verified_test_paths]
+    verified_mapping = {}
+    for instance_id, result in results.items():
+        verified_tests = result.get("verified_tests", [])
+        if verified_tests:
+            verified_mapping[instance_id] = verified_tests
+
+    verified_output = args.work_dir / "target_tests_verified.json"
+    verified_output.write_text(json.dumps(verified_mapping, indent=2))
+
     logger.info(f"\nVerification complete: {total_passed}/{total_tests} passed")
-    logger.info(f"Results saved to {output_file}")
+    logger.info(f"Detailed results saved to {output_file}")
+    logger.info(f"Verified tests mapping saved to {verified_output}")
 
 
 if __name__ == "__main__":

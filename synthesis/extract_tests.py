@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Extract existing tests from SWE-bench instances.
+Extract or specify test cases for bug generation.
 
-For each instance already set up by setup_repos.py, inspects FAIL_TO_PASS and
-test_patch to find test functions that exist in the base_commit (not newly added
-by the patch), and writes a JSON mapping of instance_id -> [pytest_paths].
-
-This output is used as input to verify_tests.py and generate_bugs.py.
+Supports two modes:
+1. User-specified tests: Provide a JSON file mapping repo_name -> [test_paths]
+2. SWE-bench mode: Extract tests from SWE-bench instances (legacy)
 
 Usage:
+    # User-specified tests
+    python synthesis/extract_tests.py \\
+        --user-tests tests_config.json \\
+        --output synthesis/workdir/target_tests.json
+
+    # SWE-bench mode (legacy)
     python synthesis/extract_tests.py \\
         --work-dir synthesis/workdir \\
         --output synthesis/workdir/target_tests.json
@@ -118,7 +122,13 @@ def extract_existing_tests_for_instance(instance_id: str, repos_dir: Path) -> li
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract existing tests from SWE-bench instances")
+    parser = argparse.ArgumentParser(description="Extract or specify test cases for bug generation")
+    parser.add_argument(
+        "--user-tests",
+        type=Path,
+        default=None,
+        help="JSON file with user-specified tests: {\"repo_name\": [\"path/to/test.py::TestClass::test_method\"]}"
+    )
     parser.add_argument("--work-dir", type=Path, default=Path("synthesis/workdir"))
     parser.add_argument(
         "--output",
@@ -130,34 +140,46 @@ def main():
         "--filter",
         default="",
         dest="filter_spec",
-        help="Only process instances whose ID contains this substring",
+        help="Only process instances whose ID contains this substring (SWE-bench mode only)",
     )
     args = parser.parse_args()
 
-    repos_dir = args.work_dir / "repos"
     output_file = args.output or (args.work_dir / "target_tests.json")
 
-    if not repos_dir.exists():
-        logger.error(f"repos dir not found: {repos_dir}. Run setup_repos.py first.")
-        return
+    # Mode 1: User-specified tests
+    if args.user_tests:
+        if not args.user_tests.exists():
+            logger.error(f"User tests file not found: {args.user_tests}")
+            return
 
-    instance_ids = sorted(d.name for d in repos_dir.iterdir() if d.is_dir())
-    if args.filter_spec:
-        instance_ids = [i for i in instance_ids if args.filter_spec in i]
-    logger.info(f"Processing {len(instance_ids)} instances")
+        logger.info(f"Loading user-specified tests from {args.user_tests}")
+        results = json.loads(args.user_tests.read_text())
+        logger.info(f"Loaded {len(results)} test configurations")
 
-    results: dict[str, list[str]] = {}
-    for i, instance_id in enumerate(instance_ids, 1):
-        logger.info(f"\n[{i}/{len(instance_ids)}] {instance_id}")
-        tests = extract_existing_tests_for_instance(instance_id, repos_dir)
-        if tests:
-            results[instance_id] = tests
+    # Mode 2: SWE-bench mode (legacy)
+    else:
+        repos_dir = args.work_dir / "repos"
+        if not repos_dir.exists():
+            logger.error(f"repos dir not found: {repos_dir}. Run setup_repos.py first or use --user-tests.")
+            return
+
+        instance_ids = sorted(d.name for d in repos_dir.iterdir() if d.is_dir())
+        if args.filter_spec:
+            instance_ids = [i for i in instance_ids if args.filter_spec in i]
+        logger.info(f"Processing {len(instance_ids)} SWE-bench instances")
+
+        results: dict[str, list[str]] = {}
+        for i, instance_id in enumerate(instance_ids, 1):
+            logger.info(f"\n[{i}/{len(instance_ids)}] {instance_id}")
+            tests = extract_existing_tests_for_instance(instance_id, repos_dir)
+            if tests:
+                results[instance_id] = tests
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(json.dumps(results, indent=2))
 
     total = sum(len(v) for v in results.values())
-    logger.info(f"\nDone: {len(results)}/{len(instance_ids)} instances have tests, {total} tests total")
+    logger.info(f"\nDone: {len(results)} configurations, {total} tests total")
     logger.info(f"Output: {output_file}")
 
 

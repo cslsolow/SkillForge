@@ -69,13 +69,13 @@ cp .env.example .env
 
 ## 🐛 Step 1 — Synthesis: generate buggy instances & collect trajectories
 
-The synthesis pipeline creates training data by introducing controlled bugs into a target repository and collecting the agent's repair attempts.
+The synthesis pipeline proactively creates `historical commits` by introducing controlled bugs into a target repository and collecting the agent's repair attempts.
 
 ### Prerequisites
 
 ```bash
-# Install SWE-bench datasets library
-pip install datasets
+# Install required packages
+pip install coverage pytest
 
 # Set API credentials
 export OPENAI_API_KEY=...
@@ -85,42 +85,43 @@ export OPENAI_BASE_URL=...   # optional
 ### Step-by-step
 
 ```bash
-# ① Clone repos and create virtual environments
-python synthesis/setup_repos.py \
-    --repo-url https://github.com/owner/repo.git \
-    --dataset verified \
-    --filter "owner__repo" \
-    --work-dir synthesis/workdir
+# ① Specify test cases to use for bug generation
+# Create a JSON file with test paths:
+cat > synthesis/workdir/user_tests.json << 'EOF'
+{
+  "my_repo": [
+    "tests/test_parser.py::TestParser::test_parse_empty",
+    "tests/test_utils.py::test_format_string"
+  ]
+}
+EOF
 
-# ② Extract existing tests from FAIL_TO_PASS / test_patch
+# Or extract from SWE-bench (legacy mode)
 python synthesis/extract_tests.py \
     --work-dir synthesis/workdir \
     --output synthesis/workdir/target_tests.json
 
-# ③ (Optional) Verify extracted tests pass on base_commit
+# ② Verify tests pass on the original code
 python synthesis/verify_tests.py \
-    --target-tests synthesis/workdir/target_tests.json \
-    --work-dir synthesis/workdir \
-    --output synthesis/workdir/target_tests_verified.json
+    --target-tests synthesis/workdir/user_tests.json \
+    --work-dir synthesis/workdir
 
-# ④ Generate buggy variants
+# ③ Generate buggy variants
 python synthesis/generate_bugs.py \
     --target-tests synthesis/workdir/target_tests_verified.json \
     --work-dir synthesis/workdir
 
-# ⑤ Assemble trajectory input
+# ④ Assemble trajectory input
 python synthesis/prepare_instances.py \
     --bugs-dir synthesis/workdir/bugs_from_patch \
     --output synthesis/workdir/instances_for_trajectory.jsonl
 
-# ⑥ Collect repair trajectories
-# The agent runs locally inside each prepared repo (no Docker required).
-# synthesis.yaml uses environment_class: local and is tuned for automated collection.
+# ⑤ Collect repair trajectories
 python synthesis/collect_trajectories.py \
     --instances synthesis/workdir/instances_for_trajectory.jsonl \
     --work-dir synthesis/workdir \
     --config src/minisweagent/config/extra/synthesis.yaml \
-    --model gpt-5-mini
+    --model gpt-4o-mini
 ```
 
 Trajectories are saved to `synthesis/workdir/trajectories/`.

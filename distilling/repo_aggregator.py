@@ -66,7 +66,10 @@ def aggregate_repo(
             agg = ensure(repo_id_from_instance_id(instance_id))
             items = rec.get("items", [])
             if isinstance(items, list):
-                agg.keypoint_items.extend(it for it in items if isinstance(it, dict))
+                for it in items:
+                    if isinstance(it, dict):
+                        it["source_instance_id"] = instance_id
+                        agg.keypoint_items.append(it)
 
     if env_in is not None:
         for rec in _iter_jsonl(env_in):
@@ -76,7 +79,10 @@ def aggregate_repo(
             agg = ensure(repo_id_from_instance_id(instance_id))
             items = rec.get("items", [])
             if isinstance(items, list):
-                agg.env_items.extend(it for it in items if isinstance(it, dict))
+                for it in items:
+                    if isinstance(it, dict):
+                        it["source_instance_id"] = instance_id
+                        agg.env_items.append(it)
 
     return aggs
 
