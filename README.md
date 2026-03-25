@@ -15,6 +15,10 @@ The overall pipeline is: **synthesize → distill → run agent with experience*
 
 The agent code (with experience injection) lives in the standard `src/minisweagent/` package, exactly as in mini-swe-agent.
 
+## 📄 Overview
+
+![SWE-Learner Overview](asset/overview.png)
+
 ---
 
 ## 📦 Repository layout
@@ -121,7 +125,7 @@ python synthesis/collect_trajectories.py \
     --instances synthesis/workdir/instances_for_trajectory.jsonl \
     --work-dir synthesis/workdir \
     --config src/minisweagent/config/extra/synthesis.yaml \
-    --model gpt-4o-mini
+    --model gpt-5-mini
 ```
 
 Trajectories are saved to `synthesis/workdir/trajectories/`.

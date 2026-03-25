@@ -17,11 +17,11 @@ class CodeAnalyzer:
         Args:
             api_key: API key (if None, read from OPENAI_API_KEY env var).
             api_base: API base URL (if None, read OPENAI_API_BASE or OPENAI_BASE_URL).
-            model: Model name (if None, read from OPENAI_MODEL env var, default gpt-4).
+            model: Model name (if None, read from OPENAI_MODEL env var, default gpt-5-mini).
         """
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.api_base = api_base or os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
         client_kwargs = {"api_key": self.api_key}
         if self.api_base:
@@ -251,7 +251,7 @@ Return a JSON array where each element has this format:
 
 
 if __name__ == "__main__":
-    analyzer = CodeAnalyzer(model="gpt-4")
+    analyzer = CodeAnalyzer(model="gpt-5-mini")
 
     with open("./traces/test_parse_empty_trace.json", 'r') as f:
         trace_summary = json.load(f)

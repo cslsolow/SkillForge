@@ -180,7 +180,7 @@ class StrictMaskBugGenerator:
             cwd=self.repo_path,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=600
         )
         
         if result.returncode == 0:

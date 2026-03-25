@@ -9,7 +9,7 @@ Usage:
         --instances synthesis/workdir/instances_for_trajectory.jsonl \\
         --work-dir synthesis/workdir \\
         --config src/minisweagent/config/extra/swebench_exp.yaml \\
-        --model gpt-4o-mini \\
+        --model gpt-5-mini \\
         --timeout 7200
 """
 import argparse
