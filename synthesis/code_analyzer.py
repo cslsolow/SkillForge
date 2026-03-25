@@ -41,7 +41,7 @@ class CodeAnalyzer:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.3
+                temperature=0
             )
             return response.choices[0].message.content
         except Exception as e:

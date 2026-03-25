@@ -145,7 +145,7 @@ class StrictMaskBugGenerator:
             self.base_commit = "unknown"
             self.version = "0.0.0"
     
-    def _call_llm(self, prompt: str, system_prompt: str = "", temperature: float = 0.7) -> str:
+    def _call_llm(self, prompt: str, system_prompt: str = "", temperature: float = 0) -> str:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -927,7 +927,7 @@ Generate a semantically complete code block:
         logger.log(f"    Original: {line_count} lines, base_indent={base_indent}")
         logger.log(f"    Note: Line count is reference only, semantic completeness is priority")
         
-        response = self._call_llm(prompt, system_prompt, temperature=0.7 + attempt * 0.1)
+        response = self._call_llm(prompt, system_prompt, temperature= 0 + attempt * 0.1)
         code = self._extract_code(response)
         
         original_code = segment['original_code']
