@@ -300,5 +300,5 @@ env:
 
 model:
   model_kwargs:
-    temperature: 1.0
+    temperature: 0
     max_tokens: 4096
