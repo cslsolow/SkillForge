@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="asset/logo.png" alt="SWE-Learner Logo" width="180" />
+  <img src="asset/logo.png" alt="SWE-Learner Logo" width="200" />
 </p>
 
 # 🧠 SWE-Learner
