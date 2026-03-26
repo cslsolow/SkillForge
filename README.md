@@ -43,7 +43,8 @@ SWE-Learner/
     tracer.py                  runtime code tracer
     code_analyzer.py           static code analyzer
     setup_repos.py             ① clone repos & create venvs for SWE-bench instances
-    verify_tests.py            ② verify extracted tests pass on base_commit
+    extract_tests.py           discover pytest node IDs (--collect-only) or load --user-tests JSON
+    verify_tests.py            ② verify tests pass on base_commit → target_tests_verified.json
     generate_bugs.py           ③ generate buggy variants via strict_mask_generator
     prepare_instances.py       ④ assemble instances_for_trajectory.jsonl
     collect_trajectories.py    ⑤ run mini-swe-agent and collect repair trajectories
@@ -93,26 +94,35 @@ export OPENAI_BASE_URL=...   # optional
 ### Step-by-step
 
 ```bash
-# ① Specify test cases to use for bug generation
-# Create a JSON file with test paths:
+# ⓪ Clone SWE-bench instances and create per-instance venvs (required before extract/verify)
+python synthesis/setup_repos.py \
+    --repo-url https://github.com/owner/repo.git \
+    --dataset verified \
+    --filter "owner__repo" \
+    --work-dir synthesis/workdir
+
+# ① Discover test cases for bug generation (pick one approach)
+
+# A) Manual JSON: instance_id (same as under workdir/repos/) -> pytest node IDs
 cat > synthesis/workdir/user_tests.json << 'EOF'
 {
-  "my_repo": [
+  "owner__repo-12345": [
     "tests/test_parser.py::TestParser::test_parse_empty",
     "tests/test_utils.py::test_format_string"
   ]
 }
 EOF
 
-# Or extract from SWE-bench (legacy mode)
+# B) Auto: run pytest --collect-only in each cloned repo under repos/<instance_id>/repo/
 python synthesis/extract_tests.py \
     --work-dir synthesis/workdir \
     --output synthesis/workdir/target_tests.json
 
-# ② Verify tests pass on the original code
+# ② Verify tests pass on the original code (use the same JSON you produced in ①)
 python synthesis/verify_tests.py \
-    --target-tests synthesis/workdir/user_tests.json \
+    --target-tests synthesis/workdir/target_tests.json \
     --work-dir synthesis/workdir
+# Or: --target-tests synthesis/workdir/user_tests.json
 
 # ③ Generate buggy variants
 python synthesis/generate_bugs.py \

@@ -82,7 +82,7 @@ def create_venv(instance_id: str, repo_path: Path, repos_dir: Path, python_bin: 
     subprocess.run([str(pip), "install", "setuptools", "wheel"], check=True, capture_output=True, timeout=300)
     subprocess.run([str(pip), "install", "-e", str(repo_path)], check=True, capture_output=True, timeout=900)
     subprocess.run(
-        [str(pip), "install", "pytest", "pytest-timeout"],
+        [str(pip), "install", "pytest", "pytest-timeout", "coverage"],
         check=True, capture_output=True, timeout=300,
     )
     return venv_path
