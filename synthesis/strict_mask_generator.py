@@ -270,7 +270,6 @@ class StrictMaskBugGenerator:
 
         test_description = trace_data.get('test_description', {})
         test_code = trace_data.get('test_code', '')
-        other_tests = trace_data.get('other_tests', [])
 
         all_attempts: List[BugAttempt] = []
         successful_bugs: List[SuccessfulBug] = []
@@ -372,7 +371,6 @@ class StrictMaskBugGenerator:
         result = self._generate_combined_output(
             successful_bugs, test_description, test_code, test_full_name,
             test_command, all_attempts, test_output_dir, logger, swebench_metadata,
-            other_tests
         )
         
         root_output_dir = Path(output_dir)
@@ -429,30 +427,7 @@ print(inspect.getsource(method))
             
             test_description = self.analyzer.analyze_test_description(test_method, test_code)
 
-            # Use pytest to collect all tests in the same file
             test_file = test_module.replace('.', '/') + '.py'
-            test_file_path = self.repo_path / test_file
-
-            if test_file_path.exists():
-                collect_cmd = [self.python_path, '-m', 'pytest', '--collect-only', '-q', str(test_file_path)]
-                try:
-                    collect_result = subprocess.run(
-                        collect_cmd, cwd=self.repo_path, capture_output=True, text=True, timeout=30
-                    )
-                    # Parse collected test names from pytest output
-                    all_tests = []
-                    for line in collect_result.stdout.splitlines():
-                        if '::' in line and not line.startswith(' '):
-                            all_tests.append(line.strip())
-
-                    # Filter out the current test
-                    other_tests = [t for t in all_tests if test_method not in t]
-                    logger.log(f"Found {len(other_tests)} other tests in {test_file}")
-                except Exception as e:
-                    logger.log(f"Failed to collect tests: {e}", "WARN")
-                    other_tests = []
-            else:
-                other_tests = []
 
             # Build test path for tracing
             if test_class:
@@ -538,7 +513,6 @@ print(inspect.getsource(method))
                 'test_code': test_code,
                 'test_description': test_description,
                 'trace_summary': trace_summary,
-                'other_tests': other_tests
             }
 
         except Exception as e:
@@ -1105,7 +1079,6 @@ Generate a semantically complete code block:
         output_dir: Path,
         logger: DetailedLogger,
         swebench_metadata: Optional[Dict] = None,
-        other_tests: List[str] = None
     ) -> Dict:
         """Generate combined output from all successful bugs."""
         
@@ -1232,9 +1205,6 @@ Generate a semantically complete code block:
             # Fallback: generate simple numeric ID
             instance_id = f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-        # Use other tests in the same file as PASS_TO_PASS
-        pass_to_pass = other_tests if other_tests else []
-
         instance = {
             "instance_id": instance_id,
             "repo": f"{self.repo_owner}/{self.repo_name}",
@@ -1243,8 +1213,7 @@ Generate a semantically complete code block:
             "problem_statement": problem_statement,
             "hints_text": "",
             "created_at": datetime.now().isoformat(),
-            "FAIL_TO_PASS": json.dumps([test_full_name]),
-            "PASS_TO_PASS": json.dumps(pass_to_pass),
+            "target_tests": json.dumps([test_full_name]),
             "buggy_patch": combined_buggy_patch,
             "bug_count": len(successful_bugs),
             "modified_files": list(set(b.segment['file'] for b in successful_bugs))

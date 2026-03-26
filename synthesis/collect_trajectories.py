@@ -88,11 +88,11 @@ def run_agent(
             return False
 
 
-def verify_fix(repo_path: Path, venv_path: Path, fail_to_pass: list) -> dict:
-    if not fail_to_pass:
+def verify_fix(repo_path: Path, venv_path: Path, target_tests: list) -> dict:
+    if not target_tests:
         return {"verified": False, "reason": "no_tests"}
 
-    test_spec = fail_to_pass[0]
+    test_spec = target_tests[0]
     if "::::" in test_spec:
         module_path, test_name = test_spec.split("::::")
         file_path = module_path.replace(".", "/") + ".py"
@@ -157,10 +157,10 @@ def process_instance(instance: dict, repos_dir: Path, output_dir: Path, config_p
         diff = subprocess.run(["git", "diff", "HEAD^", "HEAD"], cwd=repo_path, capture_output=True, text=True)
         patch = diff.stdout
 
-        ftp_raw = instance.get("FAIL_TO_PASS", "[]")
-        ftp = json.loads(ftp_raw) if isinstance(ftp_raw, str) else ftp_raw
+        tt_raw = instance.get("target_tests", "[]")
+        target_tests = json.loads(tt_raw) if isinstance(tt_raw, str) else tt_raw
         try:
-            verification = verify_fix(repo_path, venv_path, ftp)
+            verification = verify_fix(repo_path, venv_path, target_tests)
         except Exception as e:
             verification = {"verified": False, "reason": str(e)}
 

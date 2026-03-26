@@ -39,7 +39,7 @@ def find_bug_instances(bugs_dir: Path) -> list:
                 try:
                     instance = json.loads(line)
                     instance["original_instance_id"] = original_instance_id
-                    required = ["instance_id", "base_commit", "problem_statement", "buggy_patch", "FAIL_TO_PASS"]
+                    required = ["instance_id", "base_commit", "problem_statement", "buggy_patch", "target_tests"]
                     missing = [f for f in required if f not in instance]
                     if missing:
                         print(f"  ⚠ Missing {missing} in {instance.get('instance_id', '?')}")

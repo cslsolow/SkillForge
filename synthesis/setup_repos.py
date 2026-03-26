@@ -92,7 +92,7 @@ def save_metadata(instance_id: str, instance_data: Dict, repos_dir: Path):
     metadata_dir = repos_dir / instance_id
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (metadata_dir / "instance_data.json").write_text(json.dumps(instance_data, indent=2))
-    for field, filename in [("PASS_TO_PASS", "passing_tests.json"), ("test_patch", "test.patch"), ("patch", "fix.patch")]:
+    for field, filename in [("test_patch", "test.patch"), ("patch", "fix.patch")]:
         if field in instance_data:
             value = instance_data[field]
             if isinstance(value, str) and not value.startswith("["):

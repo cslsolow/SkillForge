@@ -52,7 +52,8 @@ def generate_for_test(
     class_name = parts[1] if len(parts) == 3 else ""
     method_name = parts[-1]
 
-    test_output_dir = output_base / instance_id / method_name
+    safe_test_id = test_str.replace("::", "__").replace("/", "_").replace(".", "_")
+    test_output_dir = output_base / instance_id / safe_test_id
     cmd = [
         str(python_path),
         str(generator_script),
