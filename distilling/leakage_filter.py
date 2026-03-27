@@ -92,8 +92,9 @@ def filter_and_append(
                         if source_id in exclude_ids:
                             continue
 
-                        source_repo, source_num = parse_instance_id(source_id)
-                        if source_repo in exclude_map and source_num > exclude_map[source_repo]:
+                        orig_id = item.get("original_instance_id", source_id)
+                        orig_repo, orig_num = parse_instance_id(orig_id)
+                        if orig_repo in exclude_map and orig_num > exclude_map[orig_repo]:
                             continue
 
                         filtered_items.append(item)
