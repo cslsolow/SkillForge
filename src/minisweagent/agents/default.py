@@ -14,7 +14,6 @@ from minisweagent.utils.experience import (
     format_experience,
     is_synthesized_experience_payload,
     num_from_instance_id,
-    repo_id_from_instance_id,
 )
 from minisweagent.utils.log import logger
 
@@ -91,15 +90,12 @@ class DefaultAgent:
         if is_synthesized_experience_payload(experience_data):
             current_id = getattr(self, "instance_id", "")
             current_num = num_from_instance_id(current_id)
-            current_repo = repo_id_from_instance_id(current_id)
 
             raw_keypoints = experience_data.get("keypoints", []) or []
             if current_id:
                 self._synthesized_experience_keypoints = [
-                    kp
-                    for kp in raw_keypoints
-                    if repo_id_from_instance_id(kp.get("original_instance_id", kp.get("instance_id", ""))) != current_repo
-                    or num_from_instance_id(kp.get("original_instance_id", kp.get("instance_id", ""))) <= current_num
+                    kp for kp in raw_keypoints
+                    if num_from_instance_id(kp.get("original_instance_id", kp.get("instance_id", ""))) <= current_num
                 ]
             else:
                 self._synthesized_experience_keypoints = raw_keypoints
@@ -107,10 +103,8 @@ class DefaultAgent:
             raw_env = experience_data.get("env_knowledge", []) or []
             if current_id:
                 self._synthesized_experience_env_knowledge = [
-                    item
-                    for item in raw_env
-                    if repo_id_from_instance_id(item.get("original_instance_id", item.get("source_instance_id", ""))) != current_repo
-                    or num_from_instance_id(item.get("original_instance_id", item.get("source_instance_id", ""))) <= current_num
+                    item for item in raw_env
+                    if num_from_instance_id(item.get("original_instance_id", item.get("source_instance_id", ""))) <= current_num
                 ]
             else:
                 self._synthesized_experience_env_knowledge = raw_env
