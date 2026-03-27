@@ -154,25 +154,31 @@ The distilling pipeline turns the collected trajectories into reusable *keypoint
 
 ```bash
 python -m distilling.experience_extractor \
-    --traj-dir synthesis/workdir/trajectories \
-    -o out/
+    --traj-root synthesis/workdir/trajectories \
+    --leaderboard synthesis/workdir/instances_for_trajectory.jsonl \
+    --output-dir out/ \
+    --log out/extraction.log \
+    --model gpt-5-mini \
+    --extract-keypoints --extract-env
 ```
 
 ### Stage ②  Aggregate to repo level
 
 ```bash
 python -m distilling.repo_aggregator \
-    --input-dir out/ \
-    -o out/
+    --keypoints-in out/keypoints.jsonl \
+    --env-in out/env_knowledge.jsonl \
+    --keypoints-out out/repo_keypoints.jsonl \
+    --env-out out/repo_env_knowledge.jsonl
 ```
 
 ### Stage ③  Filter evaluation leakage
 
 ```bash
 python -m distilling.leakage_filter \
-    --input-dir out/ \
+    --src-dir out/ \
     --exclude-dir /path/to/eval_instances \
-    -o out/filtered/
+    --dst-dir out/filtered/
 ```
 
 Output files: `out/filtered/repo_keypoints.jsonl`, `out/filtered/repo_env_knowledge.jsonl`
