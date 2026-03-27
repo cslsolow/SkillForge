@@ -641,7 +641,7 @@ def _process_instance(
                 if isinstance(verification, dict):
                     resolved = verification.get("all_passed")
                 if resolved is None:
-                    resolved = meta.get("success")
+                    resolved = meta.get("agent_success")
             bug_folder = meta.get("bug_folder", "")
             if bug_folder:
                 real_instance_id = Path(bug_folder).name
@@ -744,7 +744,7 @@ def _process_instance(
                     parsed = [{**it, "issue": issue_text} for it in validated]
                     break
         records.append({
-            "kind": "keypoints", "resolved": resolved,
+            "instance_id": real_instance_id, "kind": "keypoints", "resolved": resolved,
             "candidate_api_paths": candidate_api_paths, "items": parsed or [],
         })
 
@@ -773,7 +773,7 @@ def _process_instance(
                     parsed = validated
                     break
         records.append({
-            "kind": "env_knowledge", "resolved": resolved,
+            "instance_id": real_instance_id, "kind": "env_knowledge", "resolved": resolved,
             "candidate_api_paths": candidate_api_paths, "items": parsed or [],
         })
 

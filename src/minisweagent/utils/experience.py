@@ -56,6 +56,14 @@ def num_from_instance_id(instance_id: str) -> int:
     return 0
 
 
+def is_timestamp_id(instance_id: str) -> bool:
+    """True if the numeric suffix looks like a timestamp (>= 10 digits), not an issue number."""
+    match = _INSTANCE_RE.match(instance_id.strip())
+    if match:
+        return bool(_TIMESTAMP_RE.match(match.group("num")))
+    return False
+
+
 def load_synthesized_experience_jsonl(
     *,
     keypoints_path: Path | str | None = None,
