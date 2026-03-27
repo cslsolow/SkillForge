@@ -631,6 +631,7 @@ def _process_instance(
     traj = load_trajectory(traj_file)
 
     real_instance_id = instance_id
+    original_instance_id = instance_id
     effective_repo_root = repo_root
     metadata_file = Path(traj_file).parent / f"{instance_id}_metadata.json"
     if metadata_file.exists():
@@ -642,6 +643,7 @@ def _process_instance(
                     resolved = verification.get("all_passed")
                 if resolved is None:
                     resolved = meta.get("agent_success")
+            original_instance_id = meta.get("original_instance_id", instance_id)
             bug_folder = meta.get("bug_folder", "")
             if bug_folder:
                 real_instance_id = Path(bug_folder).name
@@ -741,10 +743,11 @@ def _process_instance(
             if candidate is not None:
                 validated = _validate_keypoints(candidate, candidate_set)
                 if validated is not None:
-                    parsed = [{**it, "issue": issue_text} for it in validated]
+                    parsed = [{**it, "issue": issue_text, "original_instance_id": original_instance_id} for it in validated]
                     break
         records.append({
-            "instance_id": real_instance_id, "kind": "keypoints", "resolved": resolved,
+            "instance_id": real_instance_id, "original_instance_id": original_instance_id,
+            "kind": "keypoints", "resolved": resolved,
             "candidate_api_paths": candidate_api_paths, "items": parsed or [],
         })
 
@@ -770,10 +773,11 @@ def _process_instance(
             if candidate is not None:
                 validated = _validate_env_knowledge(candidate, candidate_set)
                 if validated is not None:
-                    parsed = validated
+                    parsed = [{**it, "original_instance_id": original_instance_id} for it in validated]
                     break
         records.append({
-            "instance_id": real_instance_id, "kind": "env_knowledge", "resolved": resolved,
+            "instance_id": real_instance_id, "original_instance_id": original_instance_id,
+            "kind": "env_knowledge", "resolved": resolved,
             "candidate_api_paths": candidate_api_paths, "items": parsed or [],
         })
 

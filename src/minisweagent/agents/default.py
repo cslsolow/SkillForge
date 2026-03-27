@@ -13,7 +13,6 @@ from minisweagent.utils.bm25_retriever import BM25Retriever
 from minisweagent.utils.experience import (
     format_experience,
     is_synthesized_experience_payload,
-    is_timestamp_id,
     num_from_instance_id,
     repo_id_from_instance_id,
 )
@@ -99,9 +98,8 @@ class DefaultAgent:
                 self._synthesized_experience_keypoints = [
                     kp
                     for kp in raw_keypoints
-                    if repo_id_from_instance_id(kp.get("instance_id", "")) != current_repo
-                    or is_timestamp_id(kp.get("instance_id", ""))
-                    or num_from_instance_id(kp.get("instance_id", "")) <= current_num
+                    if repo_id_from_instance_id(kp.get("original_instance_id", kp.get("instance_id", ""))) != current_repo
+                    or num_from_instance_id(kp.get("original_instance_id", kp.get("instance_id", ""))) <= current_num
                 ]
             else:
                 self._synthesized_experience_keypoints = raw_keypoints
@@ -111,9 +109,8 @@ class DefaultAgent:
                 self._synthesized_experience_env_knowledge = [
                     item
                     for item in raw_env
-                    if repo_id_from_instance_id(item.get("source_instance_id", "")) != current_repo
-                    or is_timestamp_id(item.get("source_instance_id", ""))
-                    or num_from_instance_id(item.get("source_instance_id", "")) <= current_num
+                    if repo_id_from_instance_id(item.get("original_instance_id", item.get("source_instance_id", ""))) != current_repo
+                    or num_from_instance_id(item.get("original_instance_id", item.get("source_instance_id", ""))) <= current_num
                 ]
             else:
                 self._synthesized_experience_env_knowledge = raw_env
