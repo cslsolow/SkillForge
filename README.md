@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="asset/logo.png" alt="SWE-Learner Logo" width="200" />
+  <img src="asset/logo.png" alt="SkillForge Logo" width="200" />
 </p>
 
-# 🧠 SWE-Learner
+# 🧠 SkillForge
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![SWE-bench](https://img.shields.io/badge/SWE--bench-Verified-brightgreen.svg)](https://www.swebench.com/)
 [![Docker](https://img.shields.io/badge/docker-SWE--bench%20eval-blue.svg?logo=docker)](https://www.docker.com/)
 
-SWE-Learner is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
+SkillForge is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
 
 It extends **mini-swe-agent** with two additional components:
 
@@ -21,14 +21,14 @@ The agent code (with experience injection) lives in the standard `src/minisweage
 
 ## 📄 Overview
 
-![SWE-Learner Overview](asset/overview.png)
+![SkillForge Overview](asset/overview.png)
 
 ---
 
 ## 📦 Repository layout
 
 ```
-SWE-Learner/
+SkillForge/
   src/minisweagent/          mini-swe-agent core (with experience injection)
     agents/default.py          ← synthesized-experience env augmentation & keypoint injection
     utils/experience.py        ← load_synthesized_experience_jsonl
@@ -209,5 +209,5 @@ mini-swe-agent run-swebench \
 
 ## 🙏 Acknowledgements
 
-SWE-Learner builds on **mini-swe-agent** for the agent infrastructure and uses **SWE-bench** as the evaluation benchmark. We thank the respective authors for making their work openly available.
+SkillForge builds on **mini-swe-agent** for the agent infrastructure and uses **SWE-bench** as the evaluation benchmark. We thank the respective authors for making their work openly available.
 
