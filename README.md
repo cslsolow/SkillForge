@@ -8,16 +8,22 @@
 [![SWE-bench](https://img.shields.io/badge/SWE--bench-Verified-brightgreen.svg)](https://www.swebench.com/)
 [![Docker](https://img.shields.io/badge/docker-SWE--bench%20eval-blue.svg?logo=docker)](https://www.docker.com/)
 
-SkillForge is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured experience** from the resulting repair trajectories, and then **inject that experience at inference time** to solve new issues in the same codebase.
+SkillForge is a framework for self-improving software-engineering agents. Rather than relying on fixed, general-purpose knowledge, it enables an agent to **actively synthesize project-specific issues**, **self-distill structured skill** from the resulting repair trajectories, and then **inject that skill at inference time** to solve new issues in the same codebase.
 
 It extends **mini-swe-agent** with two additional components:
 
 - **`synthesis/`** — proactively generate buggy instances for any GitHub repository and collect repair trajectories
 - **`distilling/`** — self-distill structured *keypoints* and *environment knowledge* from those trajectories
 
-The overall pipeline is: **synthesize → distill → run agent with experience**.
-
-The agent code (with experience injection) lives in the standard `src/minisweagent/` package, exactly as in mini-swe-agent.
+The overall pipeline is: **synthesize → distill → run agent with skill**.
+@article{zhang2026swe,
+  title={Swe-bench goes live!},
+  author={Zhang, Linghao and He, Shilin and Zhang, Chaoyun and Kang, Yu and Li, Bowen and Xie, Chengxing and Wang, Junhao and Wang, Maoquan and Huang, Yufan and Fu, Shengyu and others},
+  journal={Advances in Neural Information Processing Systems},
+  volume={38},
+  year={2026}
+}
+The agent code (with skill injection) lives in the standard `src/minisweagent/` package, exactly as in mini-swe-agent.
 
 ## 📄 Overview
 
@@ -29,11 +35,11 @@ The agent code (with experience injection) lives in the standard `src/minisweage
 
 ```
 SkillForge/
-  src/minisweagent/          mini-swe-agent core (with experience injection)
-    agents/default.py          ← synthesized-experience env augmentation & keypoint injection
-    utils/experience.py        ← load_synthesized_experience_jsonl
+  src/minisweagent/          mini-swe-agent core (with skill injection)
+    agents/default.py          ← synthesized-skill env augmentation & keypoint injection
+    utils/skill.py        ← load_synthesized_skill_jsonl
     utils/bm25_retriever.py    ← BM25Retriever (env knowledge top-k)
-    run/extra/swebench.py      ← --synthesized-experience-keypoints / --synthesized-experience-env
+    run/extra/swebench.py      ← --synthesized-skill-keypoints / --synthesized-skill-env
     config/extra/
       synthesis.yaml           ← local-env config for trajectory collection
       swebench_exp.yaml        ← Docker/SWE-bench config with env_knowledge_top_k = 5
@@ -49,13 +55,13 @@ SkillForge/
     prepare_instances.py       ④ assemble instances_for_trajectory.jsonl
     collect_trajectories.py    ⑤ run mini-swe-agent and collect repair trajectories
 
-  distilling/                experience extraction pipeline  [Step 2]
+  distilling/                skill extraction pipeline  [Step 2]
     schema.py                  data classes
     trajectory_io.py           load trajectories & golden info
     llm_client.py              LLM wrapper (litellm + retry)
     code_index.py              AST-based Python scope indexer
     access_extractor.py        parse bash actions → code-access events
-    experience_extractor.py    Stage ① main extraction pipeline
+    skill_extractor.py    Stage ① main extraction pipeline
     repo_aggregator.py         Stage ② repo-level aggregation
     leakage_filter.py          Stage ③ evaluation-safety filter
 ```
@@ -146,14 +152,14 @@ Trajectories are saved to `synthesis/workdir/trajectories/`.
 
 ---
 
-## 🔬 Step 2 — Distilling: extract experience from trajectories
+## 🔬 Step 2 — Distilling: extract skill from trajectories
 
 The distilling pipeline turns the collected trajectories into reusable *keypoints* (file-level bug-fix lessons) and *environment knowledge* (API-level playbooks).
 
-### Stage ①  Extract per-instance experiences
+### Stage ①  Extract per-instance skills
 
 ```bash
-python -m distilling.experience_extractor \
+python -m distilling.skill_extractor \
     --traj-root synthesis/workdir/trajectories \
     --leaderboard synthesis/workdir/instances_for_trajectory.jsonl \
     --output-dir out/ \
@@ -185,22 +191,22 @@ Output files: `out/filtered/repo_keypoints.jsonl`, `out/filtered/repo_env_knowle
 
 ---
 
-## 🤖 Step 3 — Agent: run with experience injection
+## 🤖 Step 3 — Agent: run with skill injection
 
 ```bash
-# After distilling experiences, run the agent on SWE-bench
+# After distilling skills, run the agent on SWE-bench
 mini-swe-agent run-swebench \
     --subset verified --split test \
     --config src/minisweagent/config/extra/swebench_exp.yaml \
-    --synthesized-experience-keypoints out/filtered/repo_keypoints.jsonl \
-    --synthesized-experience-env       out/filtered/repo_env_knowledge.jsonl \
+    --synthesized-skill-keypoints out/filtered/repo_keypoints.jsonl \
+    --synthesized-skill-env       out/filtered/repo_env_knowledge.jsonl \
     -o output/run_with_exp \
     -w 4
 ```
 
-### How experience injection works
+### How skill injection works
 
-| Experience | Injection point | Mechanism |
+| skill | Injection point | Mechanism |
 |---|---|---|
 | **Env Knowledge** | Start of task | Appended to instance prompt as `=== External Memory (Env Knowledge) ===`; top-k selected by BM25 |
 | **Keypoints** | During trajectory | Injected as user message `=== Internal Memory (Keypoints) ===` when agent accesses the relevant file |
