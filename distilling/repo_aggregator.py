@@ -99,10 +99,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Aggregate per-instance experience records into repo-level JSONL."
     )
-    parser.add_argument("--keypoints-in", default=None)
-    parser.add_argument("--env-in", default=None)
-    parser.add_argument("--keypoints-out", default=None)
-    parser.add_argument("--env-out", default=None)
+    parser.add_argument("--keypoints-in", "--local-skills-in", default=None)
+    parser.add_argument("--env-in", "--global-skills-in", default=None)
+    parser.add_argument("--keypoints-out", "--local-skills-out", default=None)
+    parser.add_argument("--env-out", "--global-skills-out", default=None)
     args = parser.parse_args()
 
     keypoints_in = Path(args.keypoints_in) if args.keypoints_in else None

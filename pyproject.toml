@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "swe-learner"
+name = "skillforge"
 dynamic = ["version"]
-description = "SWE-Learner: Learning from Experience for Software Engineering Agents"
+description = "SkillForge: Self-distilling project-specific skills for software engineering agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -43,10 +43,11 @@ dev = [
 # agent runner
 mini           = "minisweagent.run.mini:app"
 mini-swe-agent = "minisweagent.run.mini:app"
-# experience extraction
-swe-learner-extract   = "distilling.experience_extractor:main"
-swe-learner-aggregate = "distilling.repo_aggregator:main"
-swe-learner-filter    = "distilling.leakage_filter:main"
+mini-extra     = "minisweagent.run.mini_extra:main"
+# skill extraction
+skillforge-extract   = "distilling.skill_extractor:main"
+skillforge-aggregate = "distilling.repo_aggregator:main"
+skillforge-filter    = "distilling.leakage_filter:main"
 
 [tool.setuptools]
 include-package-data = true

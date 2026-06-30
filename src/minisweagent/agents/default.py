@@ -213,17 +213,17 @@ class DefaultAgent:
                 top_indices = retriever.get_top_k(task, top_k)
                 selected_knowledge = [self._synthesized_experience_env_knowledge[i] for i in top_indices]
                 logger.info(
-                    f"Filtered Env Knowledge from {len(self._synthesized_experience_env_knowledge)} to {len(selected_knowledge)} using BM25"
+                    f"Filtered global diagnostic skills from {len(self._synthesized_experience_env_knowledge)} to {len(selected_knowledge)} using BM25"
                 )
             except Exception as e:
-                logger.warning(f"Failed to use BM25 for Env Knowledge filtering: {e}")
+                logger.warning(f"Failed to use BM25 for global diagnostic skill filtering: {e}")
 
         for item in selected_knowledge:
             if sid := item.get("source_instance_id"):
                 self._selected_synthesized_experience_instance_ids.add(sid)
 
         self._synthesized_experience_selected_env_knowledge = selected_knowledge
-        lines: list[str] = [task, "", "=== External Memory (Env Knowledge) ==="]
+        lines: list[str] = [task, "", "=== Global Diagnostic Skills ==="]
         for item in selected_knowledge:
             api_path = item.get("api_path", "")
             purpose = item.get("purpose", "")
@@ -257,7 +257,7 @@ class DefaultAgent:
         if not triggered_items:
             return
 
-        lines: list[str] = ["=== Internal Memory (Keypoints) ==="]
+        lines: list[str] = ["=== Local Intervention Skills ==="]
         for api_path, items in sorted(triggered_items.items(), key=lambda kv: kv[0]):
             lines.append(f"API: {api_path}")
             for it in items:

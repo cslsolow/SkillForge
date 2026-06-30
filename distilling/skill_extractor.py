@@ -721,7 +721,7 @@ def _process_instance(
                     break
         issue_text = issue_focus or _normalize_issue_focus(issue_text) or issue_text
 
-    # Keypoints extraction
+    # Local intervention skill extraction
     if extract_keypoints:
         msgs = [
             {"role": "system", "content": _KP_SYSTEM},
@@ -897,8 +897,8 @@ def main() -> None:
         help="LLM API key (or set OPENAI_API_KEY env var).",
     )
     parser.add_argument("--repo-root", default=None)
-    parser.add_argument("--extract-keypoints", action="store_true")
-    parser.add_argument("--extract-env", action="store_true")
+    parser.add_argument("--extract-keypoints", "--extract-local-skills", dest="extract_keypoints", action="store_true")
+    parser.add_argument("--extract-env", "--extract-global-skills", dest="extract_env", action="store_true")
     parser.add_argument("--max-instances", type=int, default=None)
     parser.add_argument("--max-workers", "-w", type=int, default=4)
     parser.add_argument("--max-candidates", type=int, default=200)

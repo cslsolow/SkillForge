@@ -1,9 +1,9 @@
 """
-Data classes shared across the SWE-Learner pipeline.
+Data classes shared across the SkillForge pipeline.
 
 Trajectory types (TrajectoryStep, Trajectory, GoldenInfo) represent the
 input from an SWE-agent run. Extraction types (CodeScope, CodeAccess,
-KeypointItem, EnvKnowledgeItem) represent the extracted experience records.
+KeypointItem, EnvKnowledgeItem) represent the extracted skill records.
 """
 
 from __future__ import annotations

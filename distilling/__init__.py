@@ -1,1 +1,1 @@
-"""SWE-Learner: experience extraction from SWE-agent trajectories."""
+"""SkillForge: skill extraction from SWE-agent trajectories."""

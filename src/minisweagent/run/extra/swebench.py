@@ -293,12 +293,16 @@ def main(
     synthesized_experience_keypoints: Path | None = typer.Option(
         None,
         "--synthesized-experience-keypoints",
+        "--synthesized-skill-keypoints",
+        "--local-intervention-skills",
         help="Path to synthesized keypoints JSONL (distilling output)",
         rich_help_panel="Advanced",
     ),
     synthesized_experience_env: Path | None = typer.Option(
         None,
         "--synthesized-experience-env",
+        "--synthesized-skill-env",
+        "--global-diagnostic-skills",
         help="Path to synthesized env_knowledge JSONL (distilling output)",
         rich_help_panel="Advanced",
     ),
@@ -340,7 +344,7 @@ def main(
             keypoints_path=synthesized_experience_keypoints,
             env_knowledge_path=synthesized_experience_env,
         )
-        logger.info(f"Loaded {len(synthesized_map)} synthesized-experience records")
+        logger.info(f"Loaded {len(synthesized_map)} synthesized skill records")
         if experience_map is None:
             experience_map = synthesized_map
         else:
