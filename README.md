@@ -20,7 +20,7 @@ The agent code (with skill injection) lives in the standard `src/minisweagent/` 
 
 ## 📄 Overview
 
-![SkillForge Overview](asset/overview_skill.pdf)
+![SkillForge Overview](asset/overview_skill.png)
 
 ---
 
