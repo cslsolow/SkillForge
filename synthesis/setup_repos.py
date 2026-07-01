@@ -22,6 +22,9 @@ from typing import Dict, List, Optional
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Make synthesis package importable for language adapters
+sys.path.insert(0, str(Path(__file__).parent))
+
 DATASET_MAPPING = {
     "full": "princeton-nlp/SWE-bench",
     "verified": "princeton-nlp/SWE-bench_Verified",
@@ -101,10 +104,16 @@ def save_metadata(instance_id: str, instance_data: Dict, repos_dir: Path):
                 (metadata_dir / filename).write_text(json.dumps(value, indent=2) if isinstance(value, list) else value)
 
 
-def setup_instance(instance_id: str, instance_data: Dict, repos_dir: Path, repo_url: str, python_bin: str) -> bool:
+def setup_instance(instance_id: str, instance_data: Dict, repos_dir: Path, repo_url: str, python_bin: str, language: str = "python") -> bool:
     try:
         repo_path = clone_repo(instance_id, repo_url, instance_data["base_commit"], repos_dir)
-        create_venv(instance_id, repo_path, repos_dir, python_bin)
+        if language == "python":
+            create_venv(instance_id, repo_path, repos_dir, python_bin)
+        else:
+            from language_adapters import get_adapter
+            adapter = get_adapter(language)
+            if not adapter.setup_environment(instance_id, instance_data, repos_dir):
+                logger.warning(f"  Environment setup returned False for {instance_id} ({language})")
         save_metadata(instance_id, instance_data, repos_dir)
         logger.info(f"✓ {instance_id}")
         return True
@@ -121,6 +130,8 @@ def main():
     parser.add_argument("--instances", type=Path, default=None, help="Text file with instance IDs to process (one per line)")
     parser.add_argument("--work-dir", type=Path, default=Path("synthesis/workdir"), help="Working directory")
     parser.add_argument("--python", default=sys.executable, help="Python binary to use for venv creation")
+    parser.add_argument("--language", default="python",
+                        help="Repository language: python (default), go, typescript")
     args = parser.parse_args()
 
     repos_dir = args.work_dir / "repos"
@@ -131,7 +142,7 @@ def main():
 
     results = {}
     for instance_id, instance_data in sorted(swebench_data.items()):
-        results[instance_id] = setup_instance(instance_id, instance_data, repos_dir, args.repo_url, args.python)
+        results[instance_id] = setup_instance(instance_id, instance_data, repos_dir, args.repo_url, args.python, language=args.language)
 
     success = sum(v for v in results.values())
     logger.info(f"\nSetup complete: {success}/{len(results)} successful")

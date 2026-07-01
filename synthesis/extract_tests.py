@@ -22,10 +22,13 @@ import json
 import logging
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 
 def discover_all_tests_in_repo(
@@ -119,7 +122,12 @@ def main():
         "--timeout",
         type=int,
         default=120,
-        help="Timeout in seconds for pytest --collect-only per instance",
+        help="Timeout in seconds for test collection per instance",
+    )
+    parser.add_argument(
+        "--language",
+        default="python",
+        help="Repository language: python (default), go, typescript",
     )
     args = parser.parse_args()
 
@@ -135,7 +143,7 @@ def main():
         results = json.loads(args.user_tests.read_text())
         logger.info(f"Loaded {len(results)} test configurations")
 
-    # Mode 2: Repo-scan mode — discover all tests via pytest --collect-only
+    # Mode 2: Repo-scan mode — discover tests for the given language
     else:
         repos_dir = args.work_dir / "repos"
         if not repos_dir.exists():
@@ -145,12 +153,20 @@ def main():
         instance_ids = sorted(d.name for d in repos_dir.iterdir() if d.is_dir())
         if args.filter_spec:
             instance_ids = [i for i in instance_ids if args.filter_spec in i]
-        logger.info(f"Scanning {len(instance_ids)} repositories for test cases")
+        logger.info(f"Scanning {len(instance_ids)} repositories for test cases (language={args.language})")
+
+        if args.language == "python":
+            discover_fn = lambda iid: discover_all_tests_in_repo(iid, repos_dir, timeout=args.timeout)
+        else:
+            from language_adapters import get_adapter
+            _adapter = get_adapter(args.language)
+            discover_fn = lambda iid: _adapter.discover_tests(iid, repos_dir, timeout=args.timeout)
 
         results: dict[str, list[str]] = {}
         for i, instance_id in enumerate(instance_ids, 1):
             logger.info(f"\n[{i}/{len(instance_ids)}] {instance_id}")
-            tests = discover_all_tests_in_repo(instance_id, repos_dir, timeout=args.timeout)
+            tests = discover_fn(instance_id)
+            logger.info(f"  Discovered {len(tests)} unique test cases in {instance_id}")
             if tests:
                 results[instance_id] = tests
 

@@ -16,10 +16,13 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 DEFAULT_GENERATOR = Path(__file__).parent / "strict_mask_generator.py"
 
@@ -31,41 +34,49 @@ def generate_for_test(
     output_base: Path,
     generator_script: Path,
     timeout: int,
+    language: str = "python",
+    generator_python: str = sys.executable,
 ) -> bool:
+    """Invoke strict_mask_generator.py for a single test case.
+
+    Args:
+        language: 'python', 'go', or 'typescript'.
+        generator_python: Python interpreter used to run the generator script itself.
+            For Python repos this defaults to the repo venv; for Go/TS repos any
+            Python with the required packages (openai, etc.) works.
+    """
     repo_dir = repos_dir / instance_id / "repo"
-    python_path = repos_dir / instance_id / "venv" / "bin" / "python"
 
     if not repo_dir.exists():
         logger.error(f"Repo not found: {repo_dir}")
         return False
-    if not python_path.exists():
-        logger.error(f"Python not found: {python_path}")
-        return False
 
-    parts = test_str.split("::")
-    if len(parts) < 2:
-        logger.error(f"Cannot parse test string: {test_str}")
-        return False
-
-    file_path = parts[0]
-    module_name = file_path.removesuffix(".py").replace("/", ".")
-    class_name = parts[1] if len(parts) == 3 else ""
-    method_name = parts[-1]
+    # For Python, prefer the per-instance venv to run the generator
+    if language == "python":
+        venv_py = repos_dir / instance_id / "venv" / "bin" / "python"
+        if not venv_py.exists():
+            logger.error(f"Python venv not found: {venv_py}")
+            return False
+        runner_python = str(venv_py)
+    else:
+        # For Go/TS the generator is still Python, but we use the provided interpreter
+        runner_python = generator_python
 
     safe_test_id = test_str.replace("::", "__").replace("/", "_").replace(".", "_")
     test_output_dir = output_base / instance_id / safe_test_id
+
     cmd = [
-        str(python_path),
+        runner_python,
         str(generator_script),
         "--repo", str(repo_dir),
-        "--test-module", module_name,
-        "--test-class", class_name,
-        "--test-method", method_name,
+        "--language", language,
+        "--test-str", test_str,
         "--output", str(test_output_dir),
     ]
 
     env = os.environ.copy()
-    env["PYTEST_ADDOPTS"] = "-W ignore::DeprecationWarning -W ignore::FutureWarning"
+    if language == "python":
+        env["PYTEST_ADDOPTS"] = "-W ignore::DeprecationWarning -W ignore::FutureWarning"
 
     try:
         result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout, env=env)
@@ -91,6 +102,11 @@ def main():
     parser.add_argument("--work-dir", type=Path, default=Path("synthesis/workdir"))
     parser.add_argument("--generator", type=Path, default=DEFAULT_GENERATOR, help="Path to strict_mask_generator.py")
     parser.add_argument("--timeout", type=int, default=3000, help="Timeout per test in seconds")
+    parser.add_argument("--language", default="python",
+                        help="Repository language: python (default), go, typescript")
+    parser.add_argument("--generator-python", default=sys.executable,
+                        help="Python interpreter for running strict_mask_generator.py "
+                             "(only needed for Go/TypeScript repos; defaults to sys.executable)")
     args = parser.parse_args()
 
     if not args.generator.exists():
@@ -109,7 +125,10 @@ def main():
         logger.info(f"\n{'='*60}")
         logger.info(f"{instance_id}  ({len(tests)} tests)")
         for test_str in tests:
-            ok = generate_for_test(instance_id, test_str, repos_dir, output_base, args.generator, args.timeout)
+            ok = generate_for_test(
+                instance_id, test_str, repos_dir, output_base, args.generator,
+                args.timeout, language=args.language, generator_python=args.generator_python,
+            )
             total += 1
             if ok:
                 success += 1

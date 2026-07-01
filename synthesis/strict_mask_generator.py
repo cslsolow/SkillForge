@@ -31,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from tracer import CodeTracer
 from code_analyzer import CodeAnalyzer
+from language_adapters import get_adapter
+from language_adapters.python_adapter import PythonAdapter
 
 
 @dataclass
@@ -90,12 +92,14 @@ class StrictMaskBugGenerator:
         api_key: str = None,
         api_base: str = None,
         model: str = "gpt-5-mini",
-        python_path: str = None
+        python_path: str = None,
+        language: str = "python",
     ):
         self.repo_path = Path(repo_path).resolve()
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.api_base = api_base or os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL")
         self.model = model
+        self.language = language.lower()
 
         if python_path:
             self.python_path = python_path
@@ -105,6 +109,11 @@ class StrictMaskBugGenerator:
                 self.python_path = str(venv_python)
             else:
                 self.python_path = sys.executable
+
+        # Build language adapter
+        self.adapter = get_adapter(self.language)
+        if isinstance(self.adapter, PythonAdapter):
+            self.adapter.set_python_path(self.python_path)
 
         client_kwargs: dict = {"api_key": self.api_key}
         if self.api_base:
@@ -198,16 +207,24 @@ class StrictMaskBugGenerator:
     
     def generate_bug(
         self,
-        test_module: str,
-        test_class: str,
-        test_method: str,
-        output_dir: str,
+        test_str: str = "",
+        output_dir: str = "./mask_output",
         top_k: int = 5,
         max_attempts_per_segment: int = 3,
-        swebench_metadata: Optional[Dict] = None
+        swebench_metadata: Optional[Dict] = None,
+        # Legacy Python-only params kept for backward compatibility
+        test_module: str = "",
+        test_class: str = "",
+        test_method: str = "",
     ) -> Optional[Dict]:
-        
-        test_name = test_method.replace("test_", "")
+        # Build unified test_str from legacy params if not provided
+        if not test_str and test_module:
+            if test_class:
+                test_str = f"{test_module.replace('.', '/')}.py::{test_class}::{test_method}"
+            else:
+                test_str = f"{test_module.replace('.', '/')}.py::{test_method}"
+
+        test_name = test_str.split("::")[-1].replace("test_", "").replace("Test", "")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         test_output_dir = Path(output_dir) / f"{test_name}_{timestamp}"
@@ -215,15 +232,12 @@ class StrictMaskBugGenerator:
         
         logger = DetailedLogger(test_output_dir)
         
-        if test_class:
-            test_full_name = f"{test_module}::{test_class}::{test_method}"
-            test_command = f"python -m pytest {test_module.replace('.', '/')}.py::{test_class}::{test_method} -x"
-        else:
-            test_full_name = f"{test_module}::::{test_method}"
-            test_command = f"python -m pytest {test_module.replace('.', '/')}.py::{test_method} -x"
+        test_full_name = test_str
+        test_command = self.adapter.make_test_command(test_str, self.repo_path)
         
         logger.section(f"STRICT MASK BUG GENERATION")
         logger.log(f"Test: {test_full_name}")
+        logger.log(f"Language: {self.language}")
         logger.log(f"Output: {test_output_dir}")
         logger.log(f"Mode: STRICT MASK (LLM cannot see original code)")
         
@@ -232,7 +246,7 @@ class StrictMaskBugGenerator:
             return None
         
         logger.section("PHASE 1: TRACE TEST EXECUTION")
-        trace_data = self._trace_test(test_module, test_class, test_method, logger)
+        trace_data = self._trace_test(test_str, logger)
         
         if not trace_data:
             logger.save()
@@ -386,141 +400,37 @@ class StrictMaskBugGenerator:
         
         return result
     
-    def _trace_test(self, test_module: str, test_class: str, test_method: str, logger: DetailedLogger) -> Optional[Dict]:
-        logger.log(f"Tracing: {test_module}::{test_class}::{test_method}")
-        
+    def _trace_test(self, test_str: str, logger: DetailedLogger) -> Optional[Dict]:
+        """Trace test execution to collect coverage data via the language adapter."""
+        logger.log(f"Tracing: {test_str}")
         try:
-            if test_class:
-                import_test_class = f"test_class_obj = getattr(module, '{test_class}')\ntest_instance = test_class_obj()\nmethod = getattr(test_instance, '{test_method}')"
-            else:
-                import_test_class = f"method = getattr(module, '{test_method}')"
-            
-            get_source_script = f"""
-import sys
-import inspect
-sys.path.insert(0, '{self.repo_path}')
-
-# Import module
-module = __import__('{test_module}', fromlist=[''])
-
-# Get test method
-{import_test_class}
-
-# Print source code
-print(inspect.getsource(method))
-"""
-            
-            result = subprocess.run(
-                [self.python_path, '-c', get_source_script],
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            if result.returncode != 0:
-                logger.log(f"Error getting test source: {result.stderr}", "ERROR")
+            # 1. Get test source code
+            test_code = self.adapter.get_test_source(test_str, self.repo_path)
+            if not test_code:
+                logger.log("Could not get test source code", "ERROR")
                 return None
-            
-            test_code = result.stdout
             logger.log(f"\nTest code:\n{test_code}")
-            
-            test_description = self.analyzer.analyze_test_description(test_method, test_code)
 
-            test_file = test_module.replace('.', '/') + '.py'
+            # 2. Generate natural-language test description
+            test_label = test_str.split("::")[-1]
+            test_description = self.analyzer.analyze_test_description(test_label, test_code)
 
-            # Build test path for tracing
-            if test_class:
-                test_path = f"{test_file}::{test_class}::{test_method}"
-            else:
-                test_path = f"{test_file}::{test_method}"
-
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                trace_output = f.name
-
-            env = os.environ.copy()
-            env['PYTHONPATH'] = f"{self.repo_path}:{env.get('PYTHONPATH', '')}"
-
-            # Run the target test with coverage tracing using pytest's --trace option
-            # If pytest_tracer_plugin is not available, use coverage.py as fallback
-            trace_cmd = [
-                self.python_path, '-m', 'coverage', 'run',
-                '--source', str(self.repo_path),
-                '-m', 'pytest', test_path, '-xvs'
-            ]
-
-            result = subprocess.run(
-                trace_cmd,
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                timeout=1000,
-                env=env
-            )
-
-            # Generate coverage report in JSON format
-            coverage_json = self.repo_path / '.coverage_report.json'
-            subprocess.run(
-                [self.python_path, '-m', 'coverage', 'json', '-o', str(coverage_json)],
-                cwd=self.repo_path,
-                capture_output=True,
-                timeout=60
-            )
-
-            trace_summary = {'total_files': 0, 'file_coverage': {}}
-            if coverage_json.exists():
-                try:
-                    coverage_data = json.loads(coverage_json.read_text())
-                    files = coverage_data.get('files', {})
-
-                    for filepath, file_data in files.items():
-                        rel_path = str(Path(filepath).relative_to(self.repo_path))
-                        executed_lines = file_data.get('executed_lines', [])
-
-                        if executed_lines:
-                            executed_code = {}
-                            try:
-                                with open(filepath, 'r', encoding='utf-8') as f:
-                                    file_lines = f.readlines()
-                                for line_num in executed_lines:
-                                    if 0 < line_num <= len(file_lines):
-                                        executed_code[str(line_num)] = file_lines[line_num - 1].rstrip()
-                            except Exception:
-                                pass
-
-                            trace_summary['file_coverage'][rel_path] = {
-                                'absolute_path': filepath,
-                                'executed_lines': executed_lines,
-                                'total_executed_lines': len(executed_lines),
-                                'executed_code': executed_code
-                            }
-
-                    trace_summary['total_files'] = len(trace_summary['file_coverage'])
-                    coverage_json.unlink()
-                except Exception as e:
-                    logger.log(f"Failed to parse coverage data: {e}", "WARN")
-
-            if os.path.exists(trace_output):
-                os.unlink(trace_output)
-            
+            # 3. Collect coverage via adapter
+            trace_summary = self.adapter.collect_coverage(test_str, self.repo_path, timeout=1000)
             logger.log(f"Traced {trace_summary.get('total_files', 0)} files")
 
             return {
-                'test_module': test_module,
-                'test_class': test_class,
-                'test_method': test_method,
-                'test_code': test_code,
-                'test_description': test_description,
-                'trace_summary': trace_summary,
+                "test_str": test_str,
+                "test_code": test_code,
+                "test_description": test_description,
+                "trace_summary": trace_summary,
             }
-
         except Exception as e:
             logger.log(f"Error: {e}", "ERROR")
             import traceback
             logger.log(traceback.format_exc(), "ERROR")
             return None
-    
+
     def _extract_segments_with_context(
         self,
         trace_data: Dict,
@@ -663,15 +573,14 @@ Select those that:
 
         segments_text = ""
         for i, seg in enumerate(segments):
-            segments_text += f"""
----
-Segment {i+1}:
-File: {seg['file']}
-Lines: {seg['start_line']}-{seg['end_line']} ({seg['line_count']} lines)
-```python
-{seg['original_code']}
-```
-"""
+            segments_text += (
+                f"\n---\nSegment {i+1}:\n"
+                f"File: {seg['file']}\n"
+                f"Lines: {seg['start_line']}-{seg['end_line']} ({seg['line_count']} lines)\n"
+                f"```{self.adapter.code_fence}\n"
+                f"{seg['original_code']}\n"
+                f"```\n"
+            )
         
         prompt = f"""Test purpose: {test_description.get('purpose', 'N/A')}
 Test scenario: {test_description.get('scenario', 'N/A')}
@@ -784,116 +693,78 @@ Return a JSON array sorted by importance:
         else:
             extra_context = ""
 
-        if is_complete_function:
-            system_prompt = f"""You are a Python developer. You need to implement a complete function/method.
-
-Key rules:
-1. You cannot see the original implementation — infer its purpose from context (function signature, docstring, surrounding code).
-2. Base indentation is {base_indent} spaces (the indentation of the function definition line).
-3. Code must be syntactically correct, runnable, and semantically complete.
-4. {extra_context}
-
-For this complete function/method, you must:
-- Understand the function's intent (infer from name, parameters, and context).
-- Implement the core functional logic.
-- The generated code must be a semantically complete block — do not use pass as a placeholder.
-
-Indentation example:
-{indent_str}def function_name(...):
-{indent_str}    # function body (+4 spaces)
-{indent_str}    return result"""
-        else:
-            system_prompt = f"""You are a Python developer. You need to fill in the code marked as [MASKED] based on context.
-
-Key rules:
-1. You cannot see the original code — infer it from context only.
-2. Base indentation is {base_indent} spaces.
-3. Code must be syntactically correct, runnable, and semantically complete.
-4. The generated code must be a natural code block — do not fill with multiple pass statements.
-
-Indentation example:
-{indent_str}first line of code
-{indent_str}    deeper indentation (+4 spaces) if needed
-{indent_str}second line of code"""
+        system_prompt = self.adapter.get_developer_system_prompt(
+            base_indent=base_indent,
+            is_complete_function=is_complete_function,
+            extra_context=extra_context,
+            indent_str=indent_str,
+        )
 
         if is_complete_function:
             func_signature = ""
             original_lines = segment['original_code'].split('\n')
             for line in original_lines[:3]:
-                if 'def ' in line or 'class ' in line or 'async def ' in line:
+                if 'def ' in line or 'class ' in line or 'async def ' in line or 'func ' in line:
                     func_signature = line.strip()
                     break
 
-            prompt = f"""
-Implement the complete function marked as [MASKED] below.
-
-File: {segment['file']}
-Function: {segment.get('function_name', 'unknown')}
-Location: lines {segment['start_line']} to {segment['end_line']} (original ~{line_count} lines; you may adjust as needed)
-Base indentation: {base_indent} spaces
-{f'Function signature hint: {func_signature}' if func_signature else ''}
-
-Context (before the function definition):
-```python
-{context_before}```
-
-[MASKED: implement the complete function here]
-
-Context (after the function definition):
-```python
-{context_after}```
-
-Test purpose: {test_description.get('purpose', 'unknown')}
-Test scenario: {test_description.get('scenario', 'unknown')}
-
-Implement the function based on context:
-- Generate a semantically complete block including the function signature and body.
-- Maintain base indentation of {base_indent} spaces.
-- Do not fill with pass or comments — implement actual logic.
-- Output only the code block, no explanations.
-"""
+            cf = self.adapter.code_fence
+            prompt = (
+                f"\nImplement the complete function marked as [MASKED] below.\n\n"
+                f"File: {segment['file']}\n"
+                f"Function: {segment.get('function_name', 'unknown')}\n"
+                f"Location: lines {segment['start_line']} to {segment['end_line']} "
+                f"(original ~{line_count} lines; you may adjust as needed)\n"
+                f"Base indentation: {base_indent} spaces\n"
+                + (f"Function signature hint: {func_signature}\n" if func_signature else "")
+                + f"\nContext (before the function definition):\n"
+                f"```{cf}\n{context_before}```\n\n"
+                f"[MASKED: implement the complete function here]\n\n"
+                f"Context (after the function definition):\n"
+                f"```{cf}\n{context_after}```\n\n"
+                f"Test purpose: {test_description.get('purpose', 'unknown')}\n"
+                f"Test scenario: {test_description.get('scenario', 'unknown')}\n\n"
+                f"Implement the function based on context:\n"
+                f"- Generate a semantically complete block including the function signature and body.\n"
+                f"- Maintain base indentation of {base_indent} spaces.\n"
+                f"- Do not fill with placeholder statements — implement actual logic.\n"
+                f"- Output only the code block, no explanations.\n"
+            )
         else:
             context_hints = []
             if 'if ' in context_before or 'for ' in context_before or 'while ' in context_before:
                 context_hints.append('Note: the preceding code contains control-flow statements')
             if 'return' in context_after:
                 context_hints.append('Note: the following code contains a return statement')
-            if 'raise' in context_after or 'except' in context_after:
+            if 'raise' in context_after or 'except' in context_after or 'catch' in context_after:
                 context_hints.append('Note: the following code involves exception handling')
 
             hints_text = '\n'.join(f'- {h}' for h in context_hints) if context_hints else ''
 
-            prompt = f"""
-Fill in the [MASKED] section in the code below.
-
-File: {segment['file']}
-Location: lines {segment['start_line']} to {segment['end_line']} (original ~{line_count} lines; adjust as semantics require)
-Base indentation: {base_indent} spaces
-
-Context (code before [MASKED]):
-```python
-{context_before}```
-
-[MASKED: fill in this code segment]
-
-Context (code after [MASKED]):
-```python
-{context_after}```
-
-Test purpose: {test_description.get('purpose', 'unknown')}
-Test scenario: {test_description.get('scenario', 'unknown')}
-"""
-
+            cf = self.adapter.code_fence
+            prompt = (
+                f"\nFill in the [MASKED] section in the code below.\n\n"
+                f"File: {segment['file']}\n"
+                f"Location: lines {segment['start_line']} to {segment['end_line']} "
+                f"(original ~{line_count} lines; adjust as semantics require)\n"
+                f"Base indentation: {base_indent} spaces\n\n"
+                f"Context (code before [MASKED]):\n"
+                f"```{cf}\n{context_before}```\n\n"
+                f"[MASKED: fill in this code segment]\n\n"
+                f"Context (code after [MASKED]):\n"
+                f"```{cf}\n{context_after}```\n\n"
+                f"Test purpose: {test_description.get('purpose', 'unknown')}\n"
+                f"Test scenario: {test_description.get('scenario', 'unknown')}\n"
+            )
             if hints_text:
                 prompt += f"\nContext hints:\n{hints_text}\n"
-
-            prompt += """
-Generate a semantically complete code block:
-- Maintain base indentation of {base_indent} spaces.
-- The code must flow naturally with the surrounding context.
-- Do not fill with multiple pass statements — implement actual logic.
-- Output only the code block, no explanations.
-"""
+            prompt += (
+                f"\nGenerate a semantically complete code block:\n"
+                f"- Maintain base indentation of {base_indent} spaces.\n"
+                f"- The code must flow naturally with the surrounding context.\n"
+                f"- Do not fill with placeholder statements — implement actual logic.\n"
+                f"- Output only the code block, no explanations.\n"
+            )
         
         logger.log(f"    [STRICT MASK] Type: {extraction_type}")
         logger.log(f"    Context before: {len(context_before)} chars")
@@ -1023,15 +894,15 @@ Generate a semantically complete code block:
             )
             modified_content = ''.join(modified_lines)
             
-            try:
-                ast.parse(modified_content)
-            except SyntaxError as e:
-                result['error_type'] = 'syntax_error'
-                result['error_message'] = str(e)
-                return result
-            
+            # Write file first so file-based checkers (gofmt, tsc) can read it
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(modified_content)
+
+            syntax_error = self.adapter.check_syntax(file_path, modified_content)
+            if syntax_error:
+                result['error_type'] = 'syntax_error'
+                result['error_message'] = syntax_error
+                return result
 
             # Replace only the python command at the start
             if test_command.startswith('python '):
@@ -1359,25 +1230,36 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Strict Mask Bug Generator")
-    parser.add_argument("--repo", required=True)
-    parser.add_argument("--test-module", required=True)
-    parser.add_argument("--test-class", required=True)
-    parser.add_argument("--test-method", required=True)
+    parser.add_argument("--repo", required=True, help="Path to the repository")
+    parser.add_argument("--language", default="python",
+                        help="Programming language: python (default), go, typescript")
+    # Unified test identifier (preferred for all languages)
+    parser.add_argument("--test-str", default="",
+                        help="Unified test identifier, e.g. "
+                             "'tests/test_foo.py::TestClass::test_method' (Python), "
+                             "'./pkg/parser::TestParse' (Go), "
+                             "'src/parser.test.ts::should parse' (TypeScript)")
+    # Legacy Python-only params (kept for backward compatibility)
+    parser.add_argument("--test-module", default="", help="[Python] Test module dotted path")
+    parser.add_argument("--test-class", default="", help="[Python] Test class name")
+    parser.add_argument("--test-method", default="", help="[Python] Test method name")
     parser.add_argument("--output", default="./mask_output")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--max-attempts", type=int, default=3)
     
     args = parser.parse_args()
     
-    generator = StrictMaskBugGenerator(repo_path=args.repo)
+    generator = StrictMaskBugGenerator(repo_path=args.repo, language=args.language)
     
     result = generator.generate_bug(
+        test_str=args.test_str,
+        output_dir=args.output,
+        top_k=args.top_k,
+        max_attempts_per_segment=args.max_attempts,
+        # Legacy params forwarded for Python backward compat
         test_module=args.test_module,
         test_class=args.test_class,
         test_method=args.test_method,
-        output_dir=args.output,
-        top_k=args.top_k,
-        max_attempts_per_segment=args.max_attempts
     )
     
     if result:

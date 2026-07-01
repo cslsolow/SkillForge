@@ -12,43 +12,71 @@ import argparse
 import json
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+sys.path.insert(0, str(Path(__file__).parent))
 
-def run_tests_for_instance(instance_id: str, tests: list, repos_dir: Path, timeout: int = 120) -> dict:
-    venv_python = repos_dir / instance_id / "venv" / "bin" / "python"
+
+def run_tests_for_instance(
+    instance_id: str, tests: list, repos_dir: Path,
+    timeout: int = 120, language: str = "python"
+) -> dict:
     repo_path = repos_dir / instance_id / "repo"
 
-    if not venv_python.exists():
+    if not repo_path.exists():
         return {
             "instance_id": instance_id,
             "total_tests": len(tests),
             "passed": 0,
             "failed": 0,
             "errors": 0,
-            "error": "Virtual environment not found",
+            "error": "Repository not found",
             "test_results": {},
-            "verified_tests": []
+            "verified_tests": [],
         }
+
+    # Build a callable that runs a single test and returns (returncode, output)
+    if language == "python":
+        venv_python = repos_dir / instance_id / "venv" / "bin" / "python"
+        if not venv_python.exists():
+            return {
+                "instance_id": instance_id,
+                "total_tests": len(tests),
+                "passed": 0,
+                "failed": 0,
+                "errors": 0,
+                "error": "Virtual environment not found",
+                "test_results": {},
+                "verified_tests": [],
+            }
+        def _run(test_path):
+            cmd = [str(venv_python), "-m", "pytest", "-xvs", test_path, "--tb=short", "--no-header"]
+            r = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=timeout)
+            return r.returncode, r.stdout + r.stderr
+    else:
+        from language_adapters import get_adapter
+        _adapter = get_adapter(language)
+        def _run(test_str):
+            return _adapter.run_test(test_str, repo_path, timeout)
 
     test_results = {}
     verified_tests = []
     passed = failed = errors = 0
 
     for test_path in tests:
-        cmd = [str(venv_python), "-m", "pytest", "-xvs", test_path, "--tb=short", "--no-header"]
         try:
-            result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=timeout)
-            if result.returncode == 0:
+            rc, output = _run(test_path)
+            if rc == 0:
                 test_results[test_path] = {"status": "PASSED", "output": ""}
                 verified_tests.append(test_path)
                 passed += 1
                 logger.info(f"  ✓ {test_path}")
             else:
-                test_results[test_path] = {"status": "FAILED", "output": result.stdout + result.stderr}
+                test_results[test_path] = {"status": "FAILED", "output": output}
                 failed += 1
                 logger.warning(f"  ✗ {test_path}")
         except subprocess.TimeoutExpired:
@@ -67,7 +95,7 @@ def run_tests_for_instance(instance_id: str, tests: list, repos_dir: Path, timeo
         "failed": failed,
         "errors": errors,
         "test_results": test_results,
-        "verified_tests": verified_tests
+        "verified_tests": verified_tests,
     }
 
 
@@ -77,6 +105,8 @@ def main():
     parser.add_argument("--work-dir", type=Path, default=Path("synthesis/workdir"))
     parser.add_argument("--output", type=Path, default=None, help="Output JSON file (defaults to work-dir/test_verification_results.json)")
     parser.add_argument("--timeout", type=int, default=120, help="Timeout per test in seconds")
+    parser.add_argument("--language", default="python",
+                        help="Repository language: python (default), go, typescript")
     args = parser.parse_args()
 
     output_file = args.output or (args.work_dir / "test_verification_results.json")
@@ -92,7 +122,7 @@ def main():
 
     for i, (instance_id, tests) in enumerate(sorted(target_tests.items()), 1):
         logger.info(f"\n[{i}/{len(target_tests)}] {instance_id} ({len(tests)} tests)")
-        result = run_tests_for_instance(instance_id, tests, repos_dir, args.timeout)
+        result = run_tests_for_instance(instance_id, tests, repos_dir, args.timeout, language=args.language)
         results[instance_id] = result
         total_tests += result["total_tests"]
         total_passed += result["passed"]
