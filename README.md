@@ -41,8 +41,8 @@ SkillForge/
     strict_mask_generator.py   core bug generator (LLM-based masked code rewriting)
     tracer.py                  runtime code tracer
     code_analyzer.py           static code analyzer
-    setup_repos.py             ① clone repos & create venvs for SWE-bench instances
-    extract_tests.py           discover pytest node IDs (--collect-only) or load --user-tests JSON
+    setup_repos.py             ① clone repos & set up per-instance environments
+    extract_tests.py           discover test cases in each repo, or load --user-tests JSON
     verify_tests.py            ② verify tests pass on base_commit → target_tests_verified.json
     generate_bugs.py           ③ generate buggy variants via strict_mask_generator
     prepare_instances.py       ④ assemble instances_for_trajectory.jsonl
@@ -82,9 +82,6 @@ The synthesis pipeline proactively creates `historical commits` by introducing c
 ### Prerequisites
 
 ```bash
-# Install required packages
-pip install coverage pytest
-
 # Set API credentials
 export OPENAI_API_KEY=...
 export OPENAI_BASE_URL=...   # optional
@@ -93,7 +90,7 @@ export OPENAI_BASE_URL=...   # optional
 ### Step-by-step
 
 ```bash
-# ⓪ Clone SWE-bench instances and create per-instance venvs (required before extract/verify)
+# ⓪ Clone SWE-bench instances and prepare per-instance environments
 python3 synthesis/setup_repos.py \
     --repo-url https://github.com/owner/repo.git \
     --dataset verified \
@@ -102,7 +99,7 @@ python3 synthesis/setup_repos.py \
 
 # ① Discover test cases for bug generation (pick one approach)
 
-# A) Manual JSON: instance_id (same as under workdir/repos/) -> pytest node IDs
+# A) Manual JSON: instance_id (same as under workdir/repos/) -> test identifiers
 cat > synthesis/workdir/user_tests.json << 'EOF'
 {
   "owner__repo-12345": [
@@ -112,7 +109,7 @@ cat > synthesis/workdir/user_tests.json << 'EOF'
 }
 EOF
 
-# B) Auto: run pytest --collect-only in each cloned repo under repos/<instance_id>/repo/
+# B) Auto: discover all test cases in each cloned repo under repos/<instance_id>/repo/
 python3 synthesis/extract_tests.py \
     --work-dir synthesis/workdir \
     --output synthesis/workdir/target_tests.json
