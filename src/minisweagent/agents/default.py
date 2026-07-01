@@ -17,6 +17,10 @@ from minisweagent.utils.experience import (
 )
 from minisweagent.utils.log import logger
 
+SOURCE_EXTENSIONS = (".tsx", ".jsx", ".py", ".go", ".ts", ".js")
+_SOURCE_EXT_PATTERN = "|".join(re.escape(ext) for ext in SOURCE_EXTENSIONS)
+_SOURCE_PATH_PATTERN = rf"(?:(?:/|\./)?[\w.\-@]+/)*[\w.\-@]+(?:{_SOURCE_EXT_PATTERN})"
+
 
 @dataclass
 class AgentConfig:
@@ -238,7 +242,7 @@ class DefaultAgent:
     def _maybe_inject_synthesized_experience_keypoints(self, action: str) -> None:
         if not self._synthesized_experience_keypoints:
             return
-        referenced_files = self._extract_py_filepaths_from_action(action)
+        referenced_files = self._extract_source_filepaths_from_action(action)
         if not referenced_files:
             return
         triggered_items: dict[str, list[dict[str, Any]]] = {}
@@ -273,9 +277,9 @@ class DefaultAgent:
         self.add_message("user", "\n".join(lines).strip())
 
     @staticmethod
-    def _extract_py_filepaths_from_action(action: str) -> set[str]:
-        # Match common relative/absolute python file paths in shell commands
-        candidates = set(re.findall(r"(?:(?:/|\./)?[\w.\-]+/)*[\w.\-]+\.py", action))
+    def _extract_source_filepaths_from_action(action: str) -> set[str]:
+        # Match common relative/absolute source file paths in shell commands.
+        candidates = set(re.findall(_SOURCE_PATH_PATTERN, action))
         normalized: set[str] = set()
         for p in candidates:
             for prefix in ("/testbed/", "/testbed", "./"):
@@ -283,6 +287,6 @@ class DefaultAgent:
                     p = p[len(prefix) :]
                     break
             p = p.lstrip("/")
-            if p.endswith(".py"):
+            if p.endswith(SOURCE_EXTENSIONS):
                 normalized.add(p)
         return normalized

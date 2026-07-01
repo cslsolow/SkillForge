@@ -25,6 +25,7 @@ from .access_extractor import extract_all_code_accesses
 from .code_index import CodeIndex
 from .llm_client import _query_with_retry
 from .schema import CodeScope, GoldenInfo, Trajectory
+from .source_files import is_source_file, is_test_file
 from .trajectory_io import load_trajectory, _extract_modified_files_from_diff
 
 
@@ -205,16 +206,6 @@ def _check_if_resolved_by_llm(
 # ---------------------------------------------------------------------------
 
 
-def _is_test_file(filepath: str) -> bool:
-    fp = filepath.lstrip("/")
-    file_part = fp.split("::", 1)[0]
-    parts = [p for p in file_part.split("/") if p]
-    if any(p in {"test", "tests"} for p in parts):
-        return True
-    name = parts[-1] if parts else file_part
-    return name.startswith("test_") or name.endswith("_test.py")
-
-
 def _build_trajectory_text(traj: Trajectory, max_steps: int | None) -> str:
     lines: list[str] = []
     steps = traj.steps if max_steps is None else traj.steps[:max_steps]
@@ -244,7 +235,7 @@ def _align_accesses_to_scopes(
 
     candidate_files = {
         fp for fp in (set(filepath_access_counts) | set(extra_files))
-        if not _is_test_file(fp)
+        if is_source_file(fp) and not is_test_file(fp)
     }
 
     code_index = CodeIndex()
@@ -255,7 +246,7 @@ def _align_accesses_to_scopes(
     scope_counts: dict[str, int] = {}
     scopes: list[CodeScope] = []
     for access in accesses:
-        if _is_test_file(access.filepath):
+        if not is_source_file(access.filepath) or is_test_file(access.filepath):
             continue
         for class_name, func_name in code_index.find_scope_for_range(
             access.filepath, access.start_line, access.end_line
@@ -268,7 +259,7 @@ def _align_accesses_to_scopes(
             scopes.append(scope)
 
     for fp in sorted(extra_files):
-        if _is_test_file(fp):
+        if not is_source_file(fp) or is_test_file(fp):
             continue
         scope = CodeScope(filepath=fp)
         key = scope.scope_key
@@ -292,7 +283,7 @@ def _build_candidate_api_paths(
         + _extract_modified_files_from_diff(golden.test_patch)
         + (golden.modified_files or [])
     )
-    extra_files = [fp for fp in extra_files if fp.endswith(".py") and not _is_test_file(fp)]
+    extra_files = [fp for fp in extra_files if is_source_file(fp) and not is_test_file(fp)]
     scopes, scope_counts = _align_accesses_to_scopes(traj, repo_root, extra_files)
 
     def sort_key(scope: CodeScope) -> tuple[int, int, str]:
@@ -303,11 +294,10 @@ def _build_candidate_api_paths(
     seen: set[str] = set()
     ordered: list[str] = []
     for scope in sorted(scopes, key=sort_key):
-        if scope.filepath.endswith(".py"):
-            candidate = scope.scope_key
-            if candidate not in seen:
-                ordered.append(candidate)
-                seen.add(candidate)
+        candidate = scope.scope_key
+        if candidate not in seen:
+            ordered.append(candidate)
+            seen.add(candidate)
         if len(ordered) >= max_candidates:
             break
     return ordered

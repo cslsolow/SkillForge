@@ -436,10 +436,10 @@ class StrictMaskBugGenerator:
         trace_data: Dict,
         logger: DetailedLogger,
         min_lines: int = 3,
-        max_lines: int = 30,
+        max_lines: int = 120,
         context_lines: int = 10
     ) -> List[Dict]:
-        """Extract segments directly from trace data without heuristic or hybrid strategies."""
+        """Extract complete functions when possible, otherwise cohesive trace fragments."""
         
         file_coverage = trace_data.get('trace_summary', {}).get('file_coverage', {})
         all_segments = []
@@ -462,24 +462,175 @@ class StrictMaskBugGenerator:
             if not executed_lines:
                 continue
 
-            start_line = min(executed_lines)
-            end_line = max(executed_lines)
-
-            segment = self._create_segment_from_lines(
-                start_line, end_line, rel_path, abs_path,
-                file_lines, executed_code, context_lines
+            complete_segments = self._find_complete_function_segments(
+                rel_path, abs_path, file_content, file_lines,
+                executed_lines, context_lines, max_lines
             )
-            if segment:
-                segment['extraction_type'] = 'trace_span'
-                all_segments.append(segment)
-                logger.log(
-                    f"  Extracted trace span: {rel_path} lines {start_line}-{end_line} "
-                    f"({segment['line_count']} lines)"
-                )
+            if complete_segments:
+                all_segments.extend(complete_segments)
+                for segment in complete_segments:
+                    logger.log(
+                        f"  Extracted complete function: {rel_path} lines "
+                        f"{segment['start_line']}-{segment['end_line']} "
+                        f"({segment['line_count']} lines)"
+                    )
+                continue
 
-        logger.log(f"Extracted {len(all_segments)} segments directly from trace spans")
+            for group in self._group_consecutive_lines(executed_lines):
+                if len(group) < min_lines:
+                    continue
+                start_line = min(group)
+                end_line = max(group)
+                segment = self._create_segment_from_lines(
+                    start_line, end_line, rel_path, abs_path,
+                    file_lines, executed_code, context_lines
+                )
+                if segment:
+                    segment['extraction_type'] = 'cohesive_trace_fragment'
+                    all_segments.append(segment)
+                    logger.log(
+                        f"  Extracted trace fragment: {rel_path} lines {start_line}-{end_line} "
+                        f"({segment['line_count']} lines)"
+                    )
+
+        logger.log(f"Extracted {len(all_segments)} complete functions/fragments")
         
         return all_segments
+
+    def _find_complete_function_segments(
+        self,
+        rel_path: str,
+        abs_path: str,
+        file_content: str,
+        file_lines: List[str],
+        executed_lines: List[int],
+        context_lines: int,
+        max_lines: int,
+    ) -> List[Dict]:
+        suffix = Path(rel_path).suffix
+        if suffix == ".py":
+            functions = self._find_python_functions(file_content)
+        elif suffix == ".go":
+            functions = self._find_brace_functions(file_content, language="go")
+        elif suffix in {".ts", ".tsx", ".js", ".jsx"}:
+            functions = self._find_brace_functions(file_content, language="typescript")
+        else:
+            functions = []
+
+        segments = []
+        seen = set()
+        for func_info in functions:
+            if func_info["end_line"] - func_info["start_line"] + 1 > max_lines:
+                continue
+            if not self._ranges_overlap(
+                min(executed_lines), max(executed_lines),
+                func_info["start_line"], func_info["end_line"]
+            ):
+                continue
+            key = (func_info["start_line"], func_info["end_line"], func_info["name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            segment = self._create_complete_function_segment(
+                func_info, rel_path, abs_path, file_lines, context_lines
+            )
+            if segment:
+                segment["extraction_type"] = "complete_function"
+                segments.append(segment)
+        return segments
+
+    def _find_python_functions(self, file_content: str) -> List[Dict]:
+        try:
+            tree = ast.parse(file_content)
+        except SyntaxError:
+            return []
+        functions = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions.append({
+                    "name": node.name,
+                    "type": "function",
+                    "start_line": node.lineno,
+                    "end_line": node.end_lineno or node.lineno,
+                    "has_docstring": bool(ast.get_docstring(node)),
+                })
+        return functions
+
+    def _find_brace_functions(self, file_content: str, language: str) -> List[Dict]:
+        if language == "go":
+            pattern = re.compile(
+                r"func\s+(?:\([^)]*\)\s*)?(?P<name>[A-Za-z_]\w*)\s*\([^)]*\)[^{]*\{",
+                re.MULTILINE,
+            )
+        else:
+            pattern = re.compile(
+                r"(?:export\s+)?(?:async\s+)?function\s+(?P<func>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{|"
+                r"(?P<const>[A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{|"
+                r"(?P<method>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
+                re.MULTILINE,
+            )
+
+        functions = []
+        for match in pattern.finditer(file_content):
+            name = match.groupdict().get("name") or match.groupdict().get("func")
+            name = name or match.groupdict().get("const") or match.groupdict().get("method")
+            open_brace = file_content.find("{", match.end() - 1)
+            if not name or open_brace < 0:
+                continue
+            end_offset = self._find_matching_brace(file_content, open_brace)
+            functions.append({
+                "name": name,
+                "type": "function",
+                "start_line": self._line_number_at(file_content, match.start()),
+                "end_line": self._line_number_at(file_content, end_offset),
+                "has_docstring": False,
+            })
+        return functions
+
+    @staticmethod
+    def _line_number_at(content: str, offset: int) -> int:
+        return content.count("\n", 0, offset) + 1
+
+    @staticmethod
+    def _find_matching_brace(content: str, open_brace: int) -> int:
+        depth = 0
+        in_string = None
+        escaped = False
+        for i in range(open_brace, len(content)):
+            ch = content[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == in_string:
+                    in_string = None
+                continue
+            if ch in {"'", '"', "`"}:
+                in_string = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        return len(content) - 1
+
+    @staticmethod
+    def _ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+        return a_start <= b_end and b_start <= a_end
+
+    @staticmethod
+    def _group_consecutive_lines(lines: List[int]) -> List[List[int]]:
+        if not lines:
+            return []
+        groups = [[lines[0]]]
+        for line in lines[1:]:
+            if line == groups[-1][-1] + 1:
+                groups[-1].append(line)
+            else:
+                groups.append([line])
+        return groups
     
     def _create_complete_function_segment(
         self,
@@ -1118,64 +1269,25 @@ Return a JSON array sorted by importance:
         test_error_output: str,
         logger: DetailedLogger
     ) -> str:
-        """Generate a GitHub issue from the buggy patch and test failure output.
+        """Generate a user-facing issue only from observable test failure evidence."""
 
-        Approach:
-        1. Reverse-engineer the problems users would encounter from each bug's code changes.
-        2. Integrate all bugs' impacts into a comprehensive problem description.
-        3. Do not provide reproduction steps to avoid misleading the model.
-        """
-        
-        # Build detailed analysis for each bug (for LLM to understand the root issues)
-        bug_analyses = []
-        for i, bug in enumerate(bugs, 1):
-            # Analyze what problems this bug will cause
-            bug_analyses.append(f"""
-### Bug {i}: {bug.segment['file']}
-
-**Location**: Lines {bug.segment['start_line']}-{bug.segment['end_line']}
-
-**Correct Code** (Expected user behavior):
-```python
-{bug.original_code}
-```
-
-**Buggy Code** (Current version with bug):
-```python
-{bug.buggy_code}
-```
-
-**Potential Problems from This Change**: Please analyze what functional anomalies this code change will cause
-""")
-        
-        bug_analyses_text = "\n".join(bug_analyses)
-        
         error_lines = test_error_output.strip().split('\n')
         if len(error_lines) > 30:
             error_summary = '\n'.join(error_lines[-30:])
         else:
             error_summary = test_error_output.strip()
         
-        prompt = f"""You are a technical documentation expert. Write a GitHub issue based on code changes and error information.
+        prompt = f"""You are a technical documentation expert. Write a user-facing GitHub issue from observable failure evidence only.
 
 ## Task Description
 
-Based on the following information, reverse-engineer what problems users will encounter when using this library, and write an issue.
-
-Analyze each bug's code changes, understand what problems they will cause individually, and then provide a comprehensive description.
+Based on the following test intent and failing test output, describe the externally observable problem a user would report.
 
 ## Feature Context
 
 Test case description: {test_description.get('purpose', 'N/A')}
-
-Related test code:
-```python
-{test_code}
-```
-
-## Bug Details ({len(bugs)} bugs total, all must be considered)
-
-{bug_analyses_text}
+Test scenario: {test_description.get('scenario', 'N/A')}
+Expected behavior: {test_description.get('expected_behavior', 'N/A')}
 
 ## Actual Error Output When Running
 
@@ -1185,12 +1297,11 @@ Related test code:
 
 ## Writing Requirements
 
-1. Analyze each bug's impact - Infer what problems each bug will cause based on code changes
-2. Comprehensive problem description - Integrate all bugs' impacts into a problem description from user's perspective
-3. Write from user's viewpoint - Users don't know where the specific bugs are, can only describe observed abnormal behavior
-4. Don't provide reproduction steps - Avoid giving potentially incorrect code examples
-5. Expected vs Actual - Clearly contrast expected behavior and actual behavior
-6. Can mention multiple issues - If different bugs cause different anomalies, mention them all
+1. Write from a user's viewpoint.
+2. Describe expected vs actual behavior using only the evidence above.
+3. Do not mention implementation files, line numbers, patches, rewritten code, tests as repair hints, or root-cause details.
+4. Do not provide reproduction steps or code examples.
+5. If the failure output is too low-level, summarize the symptom conservatively.
 
 ## Output Format
 
@@ -1205,14 +1316,14 @@ Do NOT include:
 - Reproduction steps
 - Specific code examples
 - Environment information
+- File names, line numbers, patch snippets, or implementation details
 
 Output the issue content directly without additional explanations.
 """
         
         system_prompt = """You are an experienced developer reporting a bug.
-Your task is to reverse-engineer what problems users will encounter based on code changes.
-Consider all bugs and comprehensively describe all possible abnormal phenomena.
-Don't expose specific bug locations, only describe behavior users can observe."""
+Your task is to describe only externally observable behavior from failing test evidence.
+Do not expose implementation details, repair hints, specific files, line numbers, or code changes."""
         
         issue_content = self._call_llm(prompt, system_prompt)
         

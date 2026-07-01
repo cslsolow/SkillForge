@@ -1,10 +1,13 @@
-"""AST-based Python file scope index: line-range → (class, function)."""
+"""Source-file scope index: line-range -> (class, function)."""
 
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .source_files import is_source_file
 
 
 def _get_docstring(node: ast.AST) -> str:
@@ -40,6 +43,10 @@ class FileStructure:
 
 
 def parse_file_structure(filepath: str, content: str) -> FileStructure:
+    suffix = Path(filepath).suffix
+    if suffix != ".py":
+        return parse_brace_file_structure(filepath, content)
+
     try:
         tree = ast.parse(content)
     except SyntaxError:
@@ -79,6 +86,67 @@ def parse_file_structure(filepath: str, content: str) -> FileStructure:
     return FileStructure(filepath=filepath, classes=classes, functions=functions)
 
 
+_BRACE_FUNCTION_RE = re.compile(
+    r"""
+    (?:
+        (?:export\s+)?(?:async\s+)?function\s+(?P<js_func>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{ |
+        (?P<ts_name>[A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{ |
+        func\s+(?:\([^)]*\)\s*)?(?P<go_func>[A-Za-z_]\w*)\s*\([^)]*\)[^{]*\{
+    )
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+
+def _line_number_at(content: str, offset: int) -> int:
+    return content.count("\n", 0, offset) + 1
+
+
+def _find_matching_brace(content: str, open_brace: int) -> int:
+    depth = 0
+    i = open_brace
+    in_string: str | None = None
+    escaped = False
+    while i < len(content):
+        ch = content[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == in_string:
+                in_string = None
+        else:
+            if ch in {"'", '"', "`"}:
+                in_string = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return len(content) - 1
+
+
+def parse_brace_file_structure(filepath: str, content: str) -> FileStructure:
+    functions: dict[str, FunctionInfo] = {}
+    for match in _BRACE_FUNCTION_RE.finditer(content):
+        name = match.group("js_func") or match.group("ts_name") or match.group("go_func")
+        if not name:
+            continue
+        open_brace = content.find("{", match.end() - 1)
+        if open_brace < 0:
+            continue
+        end_offset = _find_matching_brace(content, open_brace)
+        functions[name] = FunctionInfo(
+            name=name,
+            start_line=_line_number_at(content, match.start()),
+            end_line=_line_number_at(content, end_offset),
+        )
+    return FileStructure(filepath=filepath, functions=functions)
+
+
 def _ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start <= b_end and b_start <= a_end
 
@@ -94,7 +162,7 @@ class CodeIndex:
 
     def add_file_from_repo(self, repo_root: Path, filepath: str) -> FileStructure:
         full_path = repo_root / filepath
-        if not full_path.exists() or full_path.suffix != ".py":
+        if not full_path.exists() or not is_source_file(str(full_path)):
             structure = FileStructure(filepath=filepath)
             self._file_structures[filepath] = structure
             return structure

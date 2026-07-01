@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from .schema import AccessType, CodeAccess
+from .source_files import SOURCE_EXTENSIONS, is_source_file
 
 _ROOT_PREFIXES = ("/testbed/", "./", "/testbed")
 
@@ -20,11 +21,15 @@ def _normalize_filepath(path: str) -> str:
     return path.lstrip("/")
 
 
+_SOURCE_EXT_PATTERN = "|".join(re.escape(ext) for ext in SOURCE_EXTENSIONS)
+_SOURCE_PATH_PATTERN = rf"(?:(?:/|\./)?[\w.\-@]+/)*[\w.\-@]+(?:{_SOURCE_EXT_PATTERN})"
+
+
 def _extract_filepaths_from_find(output: str) -> list[str]:
     return [
         _normalize_filepath(line.strip())
         for line in output.strip().splitlines()
-        if line.strip().endswith(".py")
+        if is_source_file(line.strip())
     ]
 
 
@@ -35,7 +40,7 @@ def _parse_grep_command(action: str) -> tuple[str | None, str | None]:
     match = re.search(r"(\S+)\s*$", action)
     if match:
         target = match.group(1)
-        if target.endswith(".py"):
+        if is_source_file(target):
             return _normalize_filepath(target), None
     return None, None
 
@@ -43,7 +48,7 @@ def _parse_grep_command(action: str) -> tuple[str | None, str | None]:
 def _parse_grep_output(output: str) -> list[tuple[str, int]]:
     results: list[tuple[str, int]] = []
     for line in output.strip().splitlines():
-        m = re.match(r"^(\S+\.py):(\d+):", line)
+        m = re.match(rf"^(\S+(?:{_SOURCE_EXT_PATTERN})):(\d+):", line)
         if m:
             results.append((_normalize_filepath(m.group(1)), int(m.group(2))))
             continue
@@ -65,12 +70,12 @@ def _parse_sed_view_command(action: str) -> tuple[str | None, int | None, int | 
 
 def _parse_nl_sed_command(action: str) -> tuple[str | None, int | None, int | None]:
     m = re.search(
-        r"nl\s+(?:-\w+\s+)*(\S+\.py)\s*\|\s*sed\s+-n\s+['\"]?(\d+),(\d+)p", action
+        rf"nl\s+(?:-\w+\s+)*({_SOURCE_PATH_PATTERN})\s*\|\s*sed\s+-n\s+['\"]?(\d+),(\d+)p", action
     )
     if m:
         return _normalize_filepath(m.group(1)), int(m.group(2)), int(m.group(3))
     m = re.search(
-        r"nl\s+(?:-\w+\s+)*(\S+\.py)\s*\|\s*sed\s+-n\s+['\"]?(\d+)p", action
+        rf"nl\s+(?:-\w+\s+)*({_SOURCE_PATH_PATTERN})\s*\|\s*sed\s+-n\s+['\"]?(\d+)p", action
     )
     if m:
         return _normalize_filepath(m.group(1)), int(m.group(2)), int(m.group(2))
@@ -78,22 +83,22 @@ def _parse_nl_sed_command(action: str) -> tuple[str | None, int | None, int | No
 
 
 def _parse_cat_command(action: str) -> str | None:
-    m = re.search(r"\bcat\s+(\S+\.py)", action)
+    m = re.search(rf"\bcat\s+({_SOURCE_PATH_PATTERN})", action)
     return _normalize_filepath(m.group(1)) if m else None
 
 
 def _parse_head_tail_command(action: str) -> tuple[str | None, int | None, int | None]:
-    m = re.search(r"\bhead\s+-n\s+(\d+)\s+(\S+\.py)", action)
+    m = re.search(rf"\bhead\s+-n\s+(\d+)\s+({_SOURCE_PATH_PATTERN})", action)
     if m:
         return _normalize_filepath(m.group(2)), 1, int(m.group(1))
-    m = re.search(r"\btail\s+-n\s+(\d+)\s+(\S+\.py)", action)
+    m = re.search(rf"\btail\s+-n\s+(\d+)\s+({_SOURCE_PATH_PATTERN})", action)
     if m:
         return _normalize_filepath(m.group(2)), None, None
     return None, None, None
 
 
 def _parse_sed_edit_command(action: str) -> tuple[str | None, int | None, int | None]:
-    m = re.search(r"sed\s+-i\s+.*\s+(\S+\.py)", action)
+    m = re.search(rf"sed\s+-i\s+.*\s+({_SOURCE_PATH_PATTERN})", action)
     if not m:
         return None, None, None
     filepath = _normalize_filepath(m.group(1))
@@ -114,7 +119,7 @@ def extract_code_accesses_from_step(
 ) -> list[CodeAccess]:
     accesses: list[CodeAccess] = []
 
-    if "find " in action and ".py" in observation:
+    if "find " in action and any(ext in observation for ext in SOURCE_EXTENSIONS):
         for fp in _extract_filepaths_from_find(observation):
             accesses.append(CodeAccess(step_index=step_index, filepath=fp, access_type=AccessType.SEARCH, thought=thought, action=action))
 
