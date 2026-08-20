@@ -208,3 +208,20 @@ mini-extra swebench \
 ## 🙏 Acknowledgements
 
 SkillForge builds on **mini-swe-agent** for the agent infrastructure and uses **SWE-bench** as the evaluation benchmark. We thank the respective authors for making their work openly available.
+
+
+## Citation
+
+If you find this work helpful for your research or development, please consider citing our paper:
+
+```bibtex
+@misc{chen2026skillforgeselfdistillingagentsprojectspecific,
+      title={SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution}, 
+      author={Silin Chen and Han Li and Xiaodong Gu and Yuling Shi and Haibing Guan},
+      year={2026},
+      eprint={2608.18933},
+      archivePrefix={arXiv},
+      primaryClass={cs.SE},
+      url={https://arxiv.org/abs/2608.18933}, 
+}
+```
