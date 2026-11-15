@@ -205,6 +205,66 @@ mini-extra swebench \
 
 ---
 
+## Skill Maintenance
+
+For sequential maintenance of Python repositories, import existing synthesis and
+distillation outputs into a repository-specific state file. Run these commands
+from the SkillForge checkout with its dependencies installed:
+
+```bash
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+
+python -m minisweagent.maintenance init \
+    --repo /path/to/project --repo-id owner__repo \
+    --commit <skill-source-commit> --model gpt-5-mini \
+    --instances synthesis/workdir/instances_for_trajectory.jsonl \
+    --local-skills out/filtered/repo_keypoints.jsonl \
+    --global-skills out/filtered/repo_env_knowledge.jsonl \
+    --state output/maintenance/state.json
+```
+
+After accepting a repository patch, update only the skills associated with changed
+entities. The command compares committed snapshots, synthesizes repair tasks for
+the affected scopes using existing tests, collects trajectories, and distills
+replacement skills. Skills for unchanged entities are retained. Deleted entities
+lose their skills; entities without usable synthetic tasks remain without skills.
+Supply a virtualenv Python with the target project's dependencies, pytest and
+coverage installed. Test IDs can optionally be supplied with `--tests tests.json`
+(a JSON array); otherwise the existing test adapter discovers them.
+
+```bash
+python -m minisweagent.maintenance update \
+    --repo /path/to/project --commit <accepted-patch-commit> \
+    --state output/maintenance/state.json \
+    --work-dir output/maintenance/runs \
+    --python /path/to/project-venv/bin/python \
+    --export-dir output/maintained
+```
+
+To upgrade the model while keeping the repository snapshot fixed, replay the
+recorded synthetic instances with the new model and re-distill both skill types.
+This command does not synthesize new tasks. Only instances whose `base_commit`
+matches the tracked snapshot are replayed; older instances are retained in state
+but are not used as tasks for the current snapshot. The refreshed skill set
+replaces the previous model's skills. If no instances exist at the current
+snapshot, first construct tasks with the synthesis pipeline and initialize a new
+state from those outputs.
+
+```bash
+python -m minisweagent.maintenance model \
+    --repo /path/to/project --model <new-model> \
+    --state output/maintenance/state.json \
+    --work-dir output/maintenance/runs \
+    --python /path/to/project-venv/bin/python \
+    --export-dir output/maintained
+```
+
+Maintenance runs use separate checkouts and publish state only after all required
+stages finish. Exported `repo_keypoints.jsonl` and `repo_env_knowledge.jsonl` use
+the same format and skill-injection flags as Step 3.
+
+---
+
 ## 🙏 Acknowledgements
 
 SkillForge builds on **mini-swe-agent** for the agent infrastructure and uses **SWE-bench** as the evaluation benchmark. We thank the respective authors for making their work openly available.
